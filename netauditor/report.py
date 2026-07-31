@@ -39,6 +39,59 @@ summary { cursor: pointer; font-weight: 600; }
 .diff-del { color: #a11a1a; text-decoration: line-through; }
 .hostcard { background: #fff; border: 1px solid #e2e5ea; border-radius: 8px; padding: 14px 18px; margin: 12px 0; }
 .small { font-size: 12px; color: #667; }
+.toolbar { position: sticky; top: 0; z-index: 5; display: flex; gap: 8px; align-items: center;
+           flex-wrap: wrap; background: rgba(245,246,248,.95); padding: 10px 0; }
+.toolbar input { padding: 7px 12px; border: 1px solid #cdd2da; border-radius: 8px;
+                 font-size: 13px; width: 280px; }
+.chip { border: 1px solid #cdd2da; background: #fff; border-radius: 14px; padding: 4px 12px;
+        font-size: 12px; cursor: pointer; }
+.chip.active { background: #1f2430; color: #fff; border-color: #1f2430; }
+.hidden { display: none !important; }
+#matchcount { font-size: 12px; color: #667; }
+"""
+
+# Filters rows of table.searchable and .hostcard blocks by free text; the severity
+# chips only constrain elements that carry a severity badge.
+_FILTER_JS = """
+(function () {
+  var q = document.getElementById('q');
+  if (!q) return;
+  var chips = document.querySelectorAll('.chip');
+  var sev = 'all';
+  function targets() {
+    var out = [];
+    document.querySelectorAll('table.searchable tr, .hostcard').forEach(function (el) {
+      if (el.tagName === 'TR' && el.querySelector('th')) return;  // keep header rows
+      out.push(el);
+    });
+    return out;
+  }
+  function apply() {
+    var text = q.value.trim().toLowerCase();
+    if (text) document.querySelectorAll('details').forEach(function (d) { d.open = true; });
+    var shown = 0, total = 0;
+    targets().forEach(function (el) {
+      var okText = !text || el.textContent.toLowerCase().indexOf(text) !== -1;
+      var badge = el.querySelector('.badge');
+      var okSev = sev === 'all' || !badge || el.querySelector('.sev-' + sev) !== null;
+      total++;
+      var show = okText && okSev;
+      el.classList.toggle('hidden', !show);
+      if (show) shown++;
+    });
+    document.getElementById('matchcount').textContent =
+      (text || sev !== 'all') ? shown + ' of ' + total + ' items shown' : '';
+  }
+  q.addEventListener('input', apply);
+  chips.forEach(function (c) {
+    c.addEventListener('click', function () {
+      chips.forEach(function (x) { x.classList.remove('active'); });
+      c.classList.add('active');
+      sev = c.getAttribute('data-sev');
+      apply();
+    });
+  });
+})();
 """
 
 
@@ -49,7 +102,18 @@ def _e(value) -> str:
 def _page(title: str, body: str) -> str:
     return (f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
-            f"<title>{_e(title)}</title><style>{_CSS}</style></head><body>{body}</body></html>")
+            f"<title>{_e(title)}</title><style>{_CSS}</style></head><body>{body}"
+            f"<script>{_FILTER_JS}</script></body></html>")
+
+
+def _toolbar(placeholder: str) -> str:
+    return (f"<div class='toolbar'>"
+            f"<input id='q' type='search' placeholder='{_e(placeholder)}'>"
+            f"<button class='chip active' data-sev='all'>All</button>"
+            f"<button class='chip' data-sev='critical'>Critical</button>"
+            f"<button class='chip' data-sev='warning'>Warning</button>"
+            f"<button class='chip' data-sev='info'>Info</button>"
+            f"<span id='matchcount'></span></div>")
 
 
 def _badge(severity: str) -> str:
@@ -82,9 +146,10 @@ def render_audit_html(audit: dict) -> str:
                         ("Critical", counts["critical"]),
                         ("Warnings", counts["warning"]),
                         ("Info", counts["info"])]))
+    body.append(_toolbar("Filter: switch, port, code, text..."))
 
     # Fleet overview
-    body.append("<h2>Fleet overview</h2><table><tr><th>Switch</th><th>Host</th><th>Model</th>"
+    body.append("<h2>Fleet overview</h2><table class='searchable'><tr><th>Switch</th><th>Host</th><th>Model</th>"
                 "<th>IOS</th><th>Uptime</th><th>STP mode</th><th>Critical</th><th>Warnings</th></tr>")
     for h in hosts:
         hc = sum(1 for f in h.get("findings", []) if f["severity"] == "critical")
@@ -102,7 +167,7 @@ def render_audit_html(audit: dict) -> str:
     body.append("<h2>Findings</h2>")
     if all_findings:
         all_findings.sort(key=lambda hf: (_SEV_ORDER.get(hf[1]["severity"], 9), hf[0]["name"]))
-        body.append("<table><tr><th>Severity</th><th>Switch</th><th>Interface</th>"
+        body.append("<table class='searchable'><tr><th>Severity</th><th>Switch</th><th>Interface</th>"
                     "<th>Code</th><th>Message</th></tr>")
         for h, f in all_findings:
             body.append(f"<tr><td>{_badge(f['severity'])}</td><td>{_e(h['name'])}</td>"
@@ -121,7 +186,7 @@ def render_audit_html(audit: dict) -> str:
         if h.get("interfaces"):
             body.append("<details><summary>Interfaces ("
                         f"{len(h['interfaces'])})</summary>"
-                        "<table><tr><th>Port</th><th>Description</th><th>Status</th><th>VLAN</th>"
+                        "<table class='searchable'><tr><th>Port</th><th>Description</th><th>Status</th><th>VLAN</th>"
                         "<th>Duplex</th><th>Speed</th><th>Uplink</th><th>PortFast</th>"
                         "<th>BPDU guard</th><th>In errs / CRC</th></tr>")
             for i in h["interfaces"]:
@@ -160,11 +225,12 @@ def render_drift_html(result: dict) -> str:
                         ("Drift items", len(items)),
                         ("Critical", counts["critical"]),
                         ("Warnings", counts["warning"])]))
+    body.append(_toolbar("Filter: config line, switch, code, text..."))
 
     body.append("<h2>Analysis findings</h2>")
     if findings:
         findings = sorted(findings, key=lambda f: (_SEV_ORDER.get(f["severity"], 9), f.get("host", "")))
-        body.append("<table><tr><th>Severity</th><th>Switch</th><th>Code</th><th>Message</th></tr>")
+        body.append("<table class='searchable'><tr><th>Severity</th><th>Switch</th><th>Code</th><th>Message</th></tr>")
         for f in findings:
             body.append(f"<tr><td>{_badge(f['severity'])}</td><td>{_e(f.get('host'))}</td>"
                         f"<td><code>{_e(f['code'])}</code></td><td>{_e(f['message'])}</td></tr>")
