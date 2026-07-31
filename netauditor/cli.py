@@ -1,0 +1,150 @@
+"""netauditor command-line interface: `audit` and `analyze` subcommands."""
+from __future__ import annotations
+
+import argparse
+import datetime
+import re
+import sys
+from pathlib import Path
+
+from . import __version__, analyzer, checks, report
+from .inventory import InventoryError, load_inventory
+
+
+def _now() -> str:
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _safe_filename(name: str) -> str:
+    return re.sub(r"[^\w.\-]+", "_", name) or "switch"
+
+
+def _parse_formats(value: str) -> "list[str]":
+    formats = [f.strip().lower() for f in value.split(",") if f.strip()]
+    bad = [f for f in formats if f not in ("json", "html")]
+    if bad:
+        raise argparse.ArgumentTypeError(f"unsupported format(s): {', '.join(bad)}")
+    return formats or ["json", "html"]
+
+
+def cmd_audit(args) -> int:
+    try:
+        hosts = load_inventory(args.inventory, prompt_missing=not args.no_prompt)
+    except InventoryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    from .collector import collect_all  # deferred so `analyze` works without netmiko
+
+    print(f"Auditing {len(hosts)} switch(es) with {args.workers} worker(s)...")
+
+    def progress(result):
+        state = f"FAILED ({result['error']})" if result.get("error") else "collected"
+        print(f"  {result['name']} [{result['host']}]: {state}")
+
+    results = collect_all(hosts, workers=args.workers, timeout=args.timeout, progress=progress)
+    reports = [checks.build_host_report(r) for r in results]
+    audit = {
+        "generated": _now(),
+        "tool_version": __version__,
+        "hosts": reports,
+    }
+
+    outdir = Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    if "json" in args.formats:
+        report.write_json(audit, outdir / "audit.json")
+        print(f"Wrote {outdir / 'audit.json'}")
+    if "html" in args.formats:
+        (outdir / "audit.html").write_text(report.render_audit_html(audit), encoding="utf-8")
+        print(f"Wrote {outdir / 'audit.html'}")
+    cfg_dir = outdir / "configs"
+    cfg_dir.mkdir(exist_ok=True)
+    for h in reports:
+        if h["config"]:
+            (cfg_dir / f"{_safe_filename(h['name'])}.cfg").write_text(h["config"], encoding="utf-8")
+    print(f"Wrote {sum(1 for h in reports if h['config'])} config export(s) to {cfg_dir}")
+
+    counts = checks.count_findings(reports)
+    print(f"Findings: {counts['critical']} critical, {counts['warning']} warning, {counts['info']} info")
+    return 1 if counts["critical"] else 0
+
+
+def cmd_analyze(args) -> int:
+    try:
+        configs = analyzer.load_configs(args.source)
+    except (ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if len(configs) < 1:
+        print("error: no configs found in source", file=sys.stderr)
+        return 2
+    if len(configs) < 2:
+        print("note: only one config found — drift needs 2+ switches; running tests only.")
+
+    drift = analyzer.compute_drift(configs) if len(configs) >= 2 else \
+        {"hosts": sorted(configs), "item_count": 0, "items": []}
+    try:
+        findings, tests_run = analyzer.run_tests(configs, args.tests)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    result = {
+        "generated": _now(),
+        "tool_version": __version__,
+        "hosts": drift["hosts"],
+        "tests_run": tests_run,
+        "drift": drift,
+        "findings": findings,
+    }
+
+    outdir = Path(args.output)
+    outdir.mkdir(parents=True, exist_ok=True)
+    if "json" in args.formats:
+        report.write_json(result, outdir / "drift.json")
+        print(f"Wrote {outdir / 'drift.json'}")
+    if "html" in args.formats:
+        (outdir / "drift.html").write_text(report.render_drift_html(result), encoding="utf-8")
+        print(f"Wrote {outdir / 'drift.html'}")
+
+    criticals = sum(1 for f in findings if f["severity"] == "critical")
+    print(f"Drift items: {drift['item_count']}; findings: {len(findings)} ({criticals} critical)")
+    return 1 if criticals else 0
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="netauditor",
+        description="SSH switch auditor: port/STP health checks, config export, drift analysis.")
+    parser.add_argument("--version", action="version", version=f"netauditor {__version__}")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_audit = sub.add_parser("audit", help="SSH to every switch, run checks, export reports")
+    p_audit.add_argument("-i", "--inventory", required=True, help="inventory file (YAML or plain text)")
+    p_audit.add_argument("-o", "--output", default="out", help="output directory (default: out)")
+    p_audit.add_argument("--formats", type=_parse_formats, default=["json", "html"],
+                         help="comma-separated: json,html (default: both)")
+    p_audit.add_argument("--workers", type=int, default=8, help="parallel SSH sessions (default: 8)")
+    p_audit.add_argument("--timeout", type=int, default=30, help="per-command timeout seconds (default: 30)")
+    p_audit.add_argument("--no-prompt", action="store_true",
+                         help="never prompt for credentials (fail instead)")
+    p_audit.set_defaults(func=cmd_audit)
+
+    p_an = sub.add_parser("analyze", help="detect config drift between switches, run extra tests")
+    p_an.add_argument("source", help="audit.json from an audit run, or a directory of *.cfg files")
+    p_an.add_argument("-o", "--output", default="out", help="output directory (default: out)")
+    p_an.add_argument("--formats", type=_parse_formats, default=["json", "html"],
+                      help="comma-separated: json,html (default: both)")
+    p_an.add_argument("--tests", default="",
+                      help=f"extra test suites, comma-separated: {', '.join(analyzer.TESTS)}, all")
+    p_an.set_defaults(func=cmd_analyze)
+
+    args = parser.parse_args(argv)
+    if getattr(args, "tests", None) is not None and isinstance(args.tests, str):
+        args.tests = [t.strip() for t in args.tests.split(",") if t.strip()]
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

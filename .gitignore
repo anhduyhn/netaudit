@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+out/
+netaudit-out/
+inventory.yml
+inventory.yaml
+inventory.txt

@@ -1,0 +1,132 @@
+# netauditor
+
+SSH-based audit tool for Cisco IOS/IOS-XE switch fleets. It connects to every
+switch in an inventory, checks port and spanning-tree health, flags likely
+problems (PortFast on uplinks, BPDU guard gaps, STP churn, err-disabled ports,
+duplex mismatches), exports each running config, and can then compare configs
+across switches to detect drift.
+
+## Install
+
+```
+pip install .
+```
+
+or for development:
+
+```
+pip install -r requirements.txt
+```
+
+Requires Python 3.9+. SSH connectivity uses [netmiko](https://github.com/ktbyers/netmiko);
+the `analyze` subcommand works without any network access.
+
+## Inventory
+
+YAML (recommended — see [examples/inventory.yml](examples/inventory.yml)):
+
+```yaml
+defaults:
+  username: audituser
+  password: changeme
+hosts:
+  - host: 10.10.0.11
+    name: sw-core-1
+  - host: 10.10.0.13
+    username: localadmin   # inline creds take priority over defaults
+    password: different
+```
+
+Plain text also works: one `ip[,username[,password]]` per line.
+
+Credential precedence: inline per-host → inventory `defaults` →
+`NETAUDITOR_USERNAME` / `NETAUDITOR_PASSWORD` / `NETAUDITOR_SECRET` environment
+variables → interactive prompt. Prefer the env vars or the prompt over putting
+passwords in the file; if you must inline them, keep the inventory out of git
+(the bundled `.gitignore` already ignores `inventory.*`).
+
+## 1. Audit
+
+```
+netauditor audit -i inventory.yml -o out
+```
+
+Connects to every switch in parallel and runs:
+`show version`, `show interfaces status`, `show interfaces`,
+`show spanning-tree summary`, `show spanning-tree detail`,
+`show cdp neighbors detail`, `show running-config`.
+
+Checks performed per switch:
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `UPLINK_PORTFAST` | critical | PortFast active on an uplink (trunk or CDP-detected switch neighbor) — loop risk |
+| `UPLINK_BPDUGUARD` | critical | BPDU guard on an uplink — first neighbor BPDU err-disables the uplink |
+| `ERRDISABLED` | critical | Port is err-disabled |
+| `STP_CHURN` | critical | High topology-change count *and* a recent change — active STP churn |
+| `UNREACHABLE` | critical | Switch could not be audited |
+| `STP_CHURN_HISTORY` / `STP_RECENT_CHANGE` | warning | Accumulated or recent topology changes |
+| `ACCESS_NO_PORTFAST` / `ACCESS_NO_BPDUGUARD` | warning | Unprotected access/edge ports |
+| `HALF_DUPLEX` / `LATE_COLLISIONS` / `INTERFACE_ERRORS` | warning | Duplex mismatch signs and error counters |
+| `GLOBAL_BPDUFILTER` / `EDGE_UNPROTECTED` | warning | Risky global STP defaults |
+| `LEGACY_STP` | info | Legacy PVST+ mode |
+
+Uplinks are identified from trunk mode/status **or** a CDP neighbor advertising
+the Switch capability, so a mis-configured access port facing another switch is
+still treated as an uplink.
+
+Output (`out/`):
+
+- `audit.json` — full structured report (facts, interfaces, findings, configs)
+- `audit.html` — self-contained report: fleet overview, findings ranked by
+  severity, per-switch interface tables, collapsible config exports
+- `configs/<switch>.cfg` — one config export per switch
+
+Exit code is `1` if any critical finding exists (usable in CI/cron), `2` on
+usage errors, otherwise `0`.
+
+## 2. Analyze (config drift + extra tests)
+
+```
+netauditor analyze out/audit.json -o out --tests all
+```
+
+The source can be the `audit.json` from step 1, the output directory itself, or
+any directory of `*.cfg` files. Drift detection compares top-level config
+blocks across switches: the majority variant becomes the consensus and every
+deviation is reported as missing / extra / modified lines per switch.
+Host-specific lines (hostname, interfaces, certificates, stack provisioning,
+SNMP location...) are excluded so they don't show up as false drift.
+
+Extra test suites via `--tests` (comma-separated, or `all`):
+
+- `security` — telnet on VTY lines, `ip http server`, default/RW SNMP
+  communities, missing `service password-encryption`, `enable password`,
+  type 0/7 user passwords
+- `stp` — spanning-tree mode mismatches between switches, no deterministic
+  root bridge configured
+- `vlans` — VLANs defined on some switches but missing on others
+
+Outputs `drift.json` and `drift.html` in the same style as the audit report.
+
+## Typical workflow
+
+```
+netauditor audit -i inventory.yml -o out
+netauditor analyze out -o out --tests all
+start out\audit.html
+```
+
+## Notes and limits
+
+- Command set and parsers target Cisco IOS/IOS-XE. `device_type` is passed
+  straight to netmiko, but the checks assume IOS-style output.
+- Parsers are regex-based and best-effort: unrecognized lines are skipped
+  rather than crashing the audit.
+- Run it with a read-only account; the tool only issues `show` commands.
+
+## Development
+
+```
+python -m unittest discover -s tests
+```
