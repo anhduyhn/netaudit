@@ -78,8 +78,10 @@ still treated as an uplink.
 Output (`out/`):
 
 - `audit.json` - full structured report (facts, interfaces, findings, configs)
-- `audit.html` - self-contained report: fleet overview, findings ranked by
-  severity, per-switch interface tables, collapsible config exports
+- `audit.html` - self-contained report: fleet overview, findings grouped by
+  code (critical groups expanded), per-switch interface tables, collapsible
+  config exports. A sticky toolbar offers free-text search, severity chips,
+  and a finding-code dropdown; the same toolbar appears in `drift.html`.
 - `configs/<switch>.cfg` - one config export per switch
 
 Exit code is `1` if any critical finding exists (usable in CI/cron), `2` on

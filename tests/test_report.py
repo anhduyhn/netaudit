@@ -47,12 +47,17 @@ class TestAuditHtml(unittest.TestCase):
     def test_has_filter_toolbar_and_script(self):
         self.assertIn("id='q'", self.html)
         self.assertIn("data-sev='critical'", self.html)
+        self.assertIn("id='codesel'", self.html)
         self.assertIn("addEventListener", self.html)
 
     def test_tables_are_searchable_and_categorised(self):
         self.assertIn("data-cat='switches'", self.html)
         self.assertIn("data-cat='findings'", self.html)
         self.assertIn("data-cat='interfaces'", self.html)
+
+    def test_findings_grouped_by_code(self):
+        self.assertIn("class='findgroup' open", self.html)  # critical group starts open
+        self.assertIn("data-code='X'", self.html)
 
     def test_untrusted_text_is_escaped(self):
         self.assertNotIn("<script>alert(1)</script>", self.html)
@@ -74,6 +79,10 @@ class TestDriftHtml(unittest.TestCase):
     def test_drift_cards_categorised(self):
         self.assertIn("data-cat='drift'", self.html)
         self.assertIn("data-cat='findings'", self.html)
+
+    def test_drift_findings_grouped_by_code(self):
+        self.assertIn("class='findgroup'", self.html)
+        self.assertIn("data-code='Y'", self.html)
 
 
 if __name__ == "__main__":

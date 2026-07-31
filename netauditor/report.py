@@ -43,6 +43,13 @@ summary { cursor: pointer; font-weight: 600; }
            flex-wrap: wrap; background: rgba(245,246,248,.95); padding: 10px 0; }
 .toolbar input { padding: 7px 12px; border: 1px solid #cdd2da; border-radius: 8px;
                  font-size: 13px; width: 280px; }
+.toolbar select { padding: 7px 10px; border: 1px solid #cdd2da; border-radius: 8px;
+                  font-size: 13px; background: #fff; max-width: 300px; }
+.findgroup { background: #fff; border: 1px solid #e2e5ea; border-radius: 8px;
+             padding: 8px 14px; margin: 8px 0; }
+.findgroup summary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.findgroup table { margin: 8px 0 4px; }
+.count { color: #667; font-size: 12px; }
 .chip { border: 1px solid #cdd2da; background: #fff; border-radius: 14px; padding: 4px 12px;
         font-size: 12px; cursor: pointer; }
 .chip.active { background: #1f2430; color: #fff; border-color: #1f2430; }
@@ -50,14 +57,33 @@ summary { cursor: pointer; font-weight: 600; }
 #matchcount { font-size: 12px; color: #667; }
 """
 
-# Filters rows of table.searchable and .hostcard blocks by free text; the severity
-# chips only constrain elements that carry a severity badge.
+# Filters rows of table.searchable and .hostcard blocks by free text, severity
+# chips (only elements that carry severity data), and the finding-code dropdown
+# (only elements that carry data-code).
 _FILTER_JS = """
 (function () {
   var q = document.getElementById('q');
   if (!q) return;
   var chips = document.querySelectorAll('.chip');
+  var codeSel = document.getElementById('codesel');
   var sev = 'all';
+
+  if (codeSel) {
+    var codes = {};
+    document.querySelectorAll('[data-code]').forEach(function (el) {
+      var c = el.getAttribute('data-code');
+      codes[c] = (codes[c] || 0) + 1;
+    });
+    var names = Object.keys(codes).sort();
+    names.forEach(function (c) {
+      var o = document.createElement('option');
+      o.value = c;
+      o.textContent = c + ' (' + codes[c] + ')';
+      codeSel.appendChild(o);
+    });
+    if (!names.length) codeSel.classList.add('hidden');
+  }
+
   function targets() {
     var out = [];
     document.querySelectorAll('table.searchable tr, .hostcard').forEach(function (el) {
@@ -66,28 +92,44 @@ _FILTER_JS = """
     });
     return out;
   }
+  function sevOf(el) {
+    if (el.hasAttribute('data-sev')) return el.getAttribute('data-sev');
+    var b = el.querySelector('.badge');
+    var m = b && b.className.match(/sev-(\\w+)/);
+    return m ? m[1] : null;
+  }
   function apply() {
     var text = q.value.trim().toLowerCase();
+    var code = codeSel ? codeSel.value : 'all';
     if (text) document.querySelectorAll('details').forEach(function (d) { d.open = true; });
     var stats = {}, order = [];
     targets().forEach(function (el) {
       var holder = el.hasAttribute('data-cat') ? el : el.closest('[data-cat]');
       var cat = holder ? holder.getAttribute('data-cat') : 'items';
       if (!stats[cat]) { stats[cat] = { shown: 0, total: 0 }; order.push(cat); }
-      var okText = !text || el.textContent.toLowerCase().indexOf(text) !== -1;
-      var badge = el.querySelector('.badge');
-      var okSev = sev === 'all' || !badge || el.querySelector('.sev-' + sev) !== null;
+      // include the row's code in the haystack so searching a code matches its rows
+      var hay = (el.textContent + ' ' + (el.getAttribute('data-code') || '')).toLowerCase();
+      var okText = !text || hay.indexOf(text) !== -1;
+      var s = sevOf(el);
+      var okSev = sev === 'all' || s === null || s === sev;
+      var elCode = el.getAttribute('data-code');
+      var okCode = code === 'all' || !elCode || elCode === code;
       stats[cat].total++;
-      var show = okText && okSev;
+      var show = okText && okSev && okCode;
       el.classList.toggle('hidden', !show);
       if (show) stats[cat].shown++;
     });
+    // a finding group disappears when none of its rows survive the filters
+    document.querySelectorAll('.findgroup').forEach(function (g) {
+      g.classList.toggle('hidden', !g.querySelector('tr:not(.hidden) td'));
+    });
     document.getElementById('matchcount').textContent =
-      (text || sev !== 'all')
+      (text || sev !== 'all' || code !== 'all')
         ? order.map(function (c) { return c + ' ' + stats[c].shown + '/' + stats[c].total; }).join('  ·  ')
         : '';
   }
   q.addEventListener('input', apply);
+  if (codeSel) codeSel.addEventListener('change', apply);
   chips.forEach(function (c) {
     c.addEventListener('click', function () {
       chips.forEach(function (x) { x.classList.remove('active'); });
@@ -98,6 +140,36 @@ _FILTER_JS = """
   });
 })();
 """
+
+# Short human titles per finding code, shown in the group headers.
+_CODE_TITLES = {
+    "UNREACHABLE": "Switch could not be audited",
+    "ERRDISABLED": "Port err-disabled",
+    "UPLINK_PORTFAST": "PortFast on uplink",
+    "UPLINK_BPDUGUARD": "BPDU guard on uplink",
+    "STP_CHURN": "Active STP churn",
+    "STP_CHURN_HISTORY": "Accumulated STP topology changes",
+    "STP_RECENT_CHANGE": "Recent STP topology change",
+    "ACCESS_NO_PORTFAST": "Access port without PortFast",
+    "ACCESS_NO_BPDUGUARD": "Access port without BPDU guard",
+    "HALF_DUPLEX": "Half-duplex link",
+    "LATE_COLLISIONS": "Late collisions (duplex mismatch)",
+    "INTERFACE_ERRORS": "High error counters",
+    "GLOBAL_BPDUFILTER": "Global BPDU filter enabled",
+    "EDGE_UNPROTECTED": "PortFast default without BPDU guard",
+    "LEGACY_STP": "Legacy PVST+ mode",
+    "NO_CONFIG": "Config not collected",
+    "TELNET_ENABLED": "Telnet enabled on VTY lines",
+    "HTTP_SERVER": "HTTP management server enabled",
+    "SNMP_DEFAULT_COMMUNITY": "Well-known SNMP community",
+    "SNMP_RW": "SNMP community with write access",
+    "NO_PASSWORD_ENCRYPTION": "Password encryption disabled",
+    "ENABLE_PASSWORD": "'enable password' instead of secret",
+    "WEAK_USER_SECRET": "Weak local user password",
+    "STP_MODE_MISMATCH": "STP mode mismatch across switches",
+    "NO_DETERMINISTIC_ROOT": "No configured STP root bridge",
+    "VLAN_INCONSISTENT": "VLAN missing on some switches",
+}
 
 
 def _e(value) -> str:
@@ -118,7 +190,30 @@ def _toolbar(placeholder: str) -> str:
             f"<button class='chip' data-sev='critical'>Critical</button>"
             f"<button class='chip' data-sev='warning'>Warning</button>"
             f"<button class='chip' data-sev='info'>Info</button>"
+            f"<select id='codesel'><option value='all'>All codes</option></select>"
             f"<span id='matchcount'></span></div>")
+
+
+def _finding_groups(findings: "list[dict]", cols: "list[str]", row_fn) -> str:
+    """Render findings as per-code collapsible groups, critical groups open."""
+    groups = {}
+    for f in findings:
+        groups.setdefault((f["severity"], f["code"]), []).append(f)
+    ordered = sorted(groups.items(),
+                     key=lambda kv: (_SEV_ORDER.get(kv[0][0], 9), -len(kv[1]), kv[0][1]))
+    out = []
+    for (severity, code), items in ordered:
+        title = _CODE_TITLES.get(code, "")
+        title_html = f"<span>{_e(title)}</span>" if title else ""
+        open_attr = " open" if severity == "critical" else ""
+        out.append(f"<details class='findgroup'{open_attr}><summary>{_badge(severity)}"
+                   f"<code>{_e(code)}</code>{title_html}"
+                   f"<span class='count'>({len(items)})</span></summary>")
+        out.append("<table class='searchable' data-cat='findings'><tr>"
+                   + "".join(f"<th>{_e(c)}</th>" for c in cols) + "</tr>")
+        out.extend(row_fn(f) for f in items)
+        out.append("</table></details>")
+    return "".join(out)
 
 
 def _badge(severity: str) -> str:
@@ -168,17 +263,17 @@ def render_audit_html(audit: dict) -> str:
             f"<td class='{'bad' if hw else 'ok'}'>{hw}</td></tr>")
     body.append("</table>")
 
-    # All findings, most severe first
+    # Findings grouped by code, most severe / most frequent first
     body.append("<h2>Findings</h2>")
     if all_findings:
-        all_findings.sort(key=lambda hf: (_SEV_ORDER.get(hf[1]["severity"], 9), hf[0]["name"]))
-        body.append("<table class='searchable' data-cat='findings'><tr><th>Severity</th><th>Switch</th><th>Interface</th>"
-                    "<th>Code</th><th>Message</th></tr>")
-        for h, f in all_findings:
-            body.append(f"<tr><td>{_badge(f['severity'])}</td><td>{_e(h['name'])}</td>"
-                        f"<td><code>{_e(f.get('interface'))}</code></td>"
-                        f"<td><code>{_e(f['code'])}</code></td><td>{_e(f['message'])}</td></tr>")
-        body.append("</table>")
+        combined = sorted((dict(f, switch=h["name"]) for h, f in all_findings),
+                          key=lambda f: (f["switch"], f.get("interface") or ""))
+        body.append(_finding_groups(
+            combined,
+            ["Switch", "Interface", "Message"],
+            lambda f: (f"<tr data-sev='{_e(f['severity'])}' data-code='{_e(f['code'])}'>"
+                       f"<td>{_e(f['switch'])}</td><td><code>{_e(f.get('interface'))}</code></td>"
+                       f"<td>{_e(f['message'])}</td></tr>")))
     else:
         body.append("<p class='ok'>No findings - clean audit.</p>")
 
@@ -234,12 +329,12 @@ def render_drift_html(result: dict) -> str:
 
     body.append("<h2>Analysis findings</h2>")
     if findings:
-        findings = sorted(findings, key=lambda f: (_SEV_ORDER.get(f["severity"], 9), f.get("host", "")))
-        body.append("<table class='searchable' data-cat='findings'><tr><th>Severity</th><th>Switch</th><th>Code</th><th>Message</th></tr>")
-        for f in findings:
-            body.append(f"<tr><td>{_badge(f['severity'])}</td><td>{_e(f.get('host'))}</td>"
-                        f"<td><code>{_e(f['code'])}</code></td><td>{_e(f['message'])}</td></tr>")
-        body.append("</table>")
+        findings = sorted(findings, key=lambda f: f.get("host") or "")
+        body.append(_finding_groups(
+            findings,
+            ["Switch", "Message"],
+            lambda f: (f"<tr data-sev='{_e(f['severity'])}' data-code='{_e(f['code'])}'>"
+                       f"<td>{_e(f.get('host'))}</td><td>{_e(f['message'])}</td></tr>")))
     else:
         body.append("<p class='ok'>No findings from the requested tests.</p>")
 
