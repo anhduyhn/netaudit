@@ -149,51 +149,51 @@ def _check_interface(iface: dict) -> "list[Finding]":
     if iface["status"] == "err-disabled":
         findings.append(Finding(
             "ERRDISABLED", "critical",
-            f"{name} is err-disabled — a protection feature (BPDU guard, port-security, ...) shut it down; "
+            f"{name} is err-disabled - a protection feature (BPDU guard, port-security, ...) shut it down; "
             "investigate the cause before re-enabling.", name))
 
     if iface["is_uplink"] and iface["portfast"]:
         who = f" (CDP neighbor: {', '.join(iface['cdp_neighbors'])})" if iface["cdp_neighbors"] else ""
         findings.append(Finding(
             "UPLINK_PORTFAST", "critical",
-            f"PortFast is active on uplink {name}{who} — the port skips listening/learning, "
+            f"PortFast is active on uplink {name}{who} - the port skips listening/learning, "
             "which can cause bridging loops and STP instability. Remove portfast from uplinks.",
             name, {"source": iface["portfast_source"]}))
 
     if iface["is_uplink"] and iface["bpduguard"]:
         findings.append(Finding(
             "UPLINK_BPDUGUARD", "critical",
-            f"BPDU guard is enabled on uplink {name} — the first BPDU from the neighbor switch "
+            f"BPDU guard is enabled on uplink {name} - the first BPDU from the neighbor switch "
             "will err-disable this uplink and cut off everything behind it.", name))
 
     if not iface["is_uplink"] and iface["status"] == "connected":
         if not iface["portfast"]:
             findings.append(Finding(
                 "ACCESS_NO_PORTFAST", "warning",
-                f"Access port {name} has no PortFast — hosts wait ~30s for STP at link-up "
+                f"Access port {name} has no PortFast - hosts wait ~30s for STP at link-up "
                 "and each flap sends topology change notifications.", name))
         if not iface["bpduguard"]:
             findings.append(Finding(
                 "ACCESS_NO_BPDUGUARD", "warning",
-                f"Access port {name} has no BPDU guard — a rogue/mis-cabled switch plugged in "
+                f"Access port {name} has no BPDU guard - a rogue/mis-cabled switch plugged in "
                 "here could trigger an STP reconvergence or loop.", name))
 
     if iface["duplex"].lstrip("a-").lower() == "half":
         findings.append(Finding(
             "HALF_DUPLEX", "warning",
-            f"{name} is running half-duplex ({iface['duplex']}) — likely a duplex mismatch or legacy device.",
+            f"{name} is running half-duplex ({iface['duplex']}) - likely a duplex mismatch or legacy device.",
             name))
 
     if iface["late_collisions"] > 0:
         findings.append(Finding(
             "LATE_COLLISIONS", "warning",
-            f"{name} has {iface['late_collisions']} late collisions — classic sign of a duplex mismatch.",
+            f"{name} has {iface['late_collisions']} late collisions - classic sign of a duplex mismatch.",
             name))
 
     if iface["input_errors"] >= ERROR_COUNTER_THRESHOLD or iface["crc"] >= ERROR_COUNTER_THRESHOLD:
         findings.append(Finding(
             "INTERFACE_ERRORS", "warning",
-            f"{name} shows {iface['input_errors']} input errors / {iface['crc']} CRC errors — "
+            f"{name} shows {iface['input_errors']} input errors / {iface['crc']} CRC errors - "
             "check cabling, SFPs and duplex.", name))
 
     return findings
@@ -204,18 +204,18 @@ def _check_global_stp(summary: dict) -> "list[Finding]":
     if summary.get("bpdufilter_default"):
         findings.append(Finding(
             "GLOBAL_BPDUFILTER", "warning",
-            "Global 'BPDU Filter Default' is enabled — edge ports silently drop BPDUs, which can "
+            "Global 'BPDU Filter Default' is enabled - edge ports silently drop BPDUs, which can "
             "hide a loop instead of preventing it. Prefer BPDU guard."))
     if summary.get("portfast_default") and not summary.get("bpduguard_default"):
         findings.append(Finding(
             "EDGE_UNPROTECTED", "warning",
-            "PortFast is enabled by default but BPDU guard default is off — edge ports come up fast "
+            "PortFast is enabled by default but BPDU guard default is off - edge ports come up fast "
             "but nothing stops a switch plugged into them."))
     mode = summary.get("mode")
     if mode == "pvst":
         findings.append(Finding(
             "LEGACY_STP", "info",
-            "Switch runs legacy PVST+ — consider rapid-pvst for sub-second convergence."))
+            "Switch runs legacy PVST+ - consider rapid-pvst for sub-second convergence."))
     return findings
 
 
@@ -229,13 +229,13 @@ def _check_stp_churn(vlans: "list[dict]") -> "list[Finding]":
         if count >= STP_CHURN_COUNT and recent:
             findings.append(Finding(
                 "STP_CHURN", "critical",
-                f"{v['vlan']}: {count} topology changes, last one {v['last_change']} ago{src} — "
+                f"{v['vlan']}: {count} topology changes, last one {v['last_change']} ago{src} - "
                 "active STP churn; every change flushes MAC tables and can cause network-wide flooding.",
                 v.get("from_port") or "", v))
         elif count >= STP_CHURN_COUNT:
             findings.append(Finding(
                 "STP_CHURN_HISTORY", "warning",
-                f"{v['vlan']}: {count} accumulated topology changes{src} — a flapping edge port "
+                f"{v['vlan']}: {count} accumulated topology changes{src} - a flapping edge port "
                 "without PortFast is the usual culprit.", v.get("from_port") or "", v))
         elif recent:
             findings.append(Finding(

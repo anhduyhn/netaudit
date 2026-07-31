@@ -71,6 +71,98 @@ class TestDrift(unittest.TestCase):
         self.assertEqual(drift["item_count"], 0)
 
 
+class TestNormalize(unittest.TestCase):
+    def test_multiline_banner_skipped(self):
+        cfg = ("hostname sw1\n"
+               "banner motd ^C\n"
+               "<> Authorised Users Only <>\n"
+               "<> monitored for security reasons <>\n"
+               "^C\n"
+               "ntp server 10.0.0.1\n")
+        norm = analyzer.normalize_config(cfg)
+        self.assertNotIn("Authorised", norm)
+        self.assertNotIn("^C", norm)
+        self.assertIn("ntp server 10.0.0.1", norm)
+
+    def test_banner_with_glued_delimiter(self):
+        # exports often show 'banner motd ^CC' where ^C is the delimiter
+        cfg = "banner motd ^CC\nKeep out\n^C\nntp server 10.0.0.1"
+        norm = analyzer.normalize_config(cfg)
+        self.assertNotIn("Keep out", norm)
+        self.assertIn("ntp server 10.0.0.1", norm)
+
+    def test_single_line_banner(self):
+        cfg = "banner motd ^CAuthorised users only^C\nntp server 10.0.0.1"
+        norm = analyzer.normalize_config(cfg)
+        self.assertNotIn("Authorised", norm)
+        self.assertIn("ntp server 10.0.0.1", norm)
+
+    def test_mask_secrets(self):
+        masked = analyzer.mask_secrets(
+            "enable secret 9 $9$abcdef\n"
+            "username admin privilege 15 secret 9 $9$xyz\n"
+            "snmp-server community S3cr3tRW RW\n"
+            "ntp server 10.0.0.1")
+        self.assertNotIn("$9$abcdef", masked)
+        self.assertNotIn("$9$xyz", masked)
+        self.assertNotIn("S3cr3tRW", masked)
+        self.assertIn("snmp-server community <redacted> RW", masked)
+        self.assertIn("ntp server 10.0.0.1", masked)
+
+
+class TestSecretAndBannerDrift(unittest.TestCase):
+    def test_differing_hashes_are_not_drift(self):
+        drift = analyzer.compute_drift({
+            "a": "enable secret 9 $9$salted-one\nntp server 10.0.0.1",
+            "b": "enable secret 9 $9$salted-two\nntp server 10.0.0.1",
+        })
+        self.assertEqual(drift["item_count"], 0)
+
+    def test_no_hashes_leak_into_items(self):
+        drift = analyzer.compute_drift({
+            "a": "enable secret 9 $9$onlyhere\nntp server 10.0.0.1",
+            "b": "ntp server 10.0.0.1",
+        })
+        headers = [i["header"] for i in drift["items"]]
+        self.assertIn("enable secret 9 <redacted>", headers)
+        self.assertNotIn("enable secret 9 $9$onlyhere", headers)
+
+    def test_banner_lines_are_not_drift(self):
+        drift = analyzer.compute_drift({
+            "a": "banner motd ^C\n<> banner A <>\n^C\nntp server 10.0.0.1",
+            "b": "banner motd ^C\n<> different banner B <>\n^C\nntp server 10.0.0.1",
+        })
+        self.assertEqual(drift["item_count"], 0)
+
+
+class TestBaseline(unittest.TestCase):
+    # Majority is "wrong" here: two switches lack ntp, only the golden one has it.
+    CONFIGS = {
+        "golden": "spanning-tree mode rapid-pvst\nntp server 10.0.0.1\n",
+        "sw-a": "spanning-tree mode rapid-pvst\n",
+        "sw-b": "spanning-tree mode rapid-pvst\nip http server\n",
+    }
+
+    def test_unknown_baseline_rejected(self):
+        with self.assertRaises(ValueError):
+            analyzer.compute_drift(self.CONFIGS, baseline="nope")
+
+    def test_baseline_is_reference_even_against_majority(self):
+        drift = analyzer.compute_drift(self.CONFIGS, baseline="golden")
+        self.assertEqual(drift["baseline"], "golden")
+        by_header = {i["header"]: i for i in drift["items"]}
+        ntp = by_header["ntp server 10.0.0.1"]
+        self.assertEqual(ntp["missing_on"], ["sw-a", "sw-b"])
+        self.assertTrue(ntp["variants"][0]["is_baseline"])
+
+    def test_extra_config_relative_to_baseline(self):
+        drift = analyzer.compute_drift(self.CONFIGS, baseline="golden")
+        by_header = {i["header"]: i for i in drift["items"]}
+        item = by_header["ip http server"]
+        self.assertIn("golden", item["missing_on"])
+        self.assertEqual(item["present_on"], ["sw-b"])
+
+
 class TestSuites(unittest.TestCase):
     def setUp(self):
         self.configs = make_configs()

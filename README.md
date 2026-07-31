@@ -23,7 +23,7 @@ the `analyze` subcommand works without any network access.
 
 ## Inventory
 
-YAML (recommended — see [examples/inventory.yml](examples/inventory.yml)):
+YAML (recommended - see [examples/inventory.yml](examples/inventory.yml)):
 
 ```yaml
 defaults:
@@ -60,10 +60,10 @@ Checks performed per switch:
 
 | Code | Severity | Meaning |
 |---|---|---|
-| `UPLINK_PORTFAST` | critical | PortFast active on an uplink (trunk or CDP-detected switch neighbor) — loop risk |
-| `UPLINK_BPDUGUARD` | critical | BPDU guard on an uplink — first neighbor BPDU err-disables the uplink |
+| `UPLINK_PORTFAST` | critical | PortFast active on an uplink (trunk or CDP-detected switch neighbor) - loop risk |
+| `UPLINK_BPDUGUARD` | critical | BPDU guard on an uplink - first neighbor BPDU err-disables the uplink |
 | `ERRDISABLED` | critical | Port is err-disabled |
-| `STP_CHURN` | critical | High topology-change count *and* a recent change — active STP churn |
+| `STP_CHURN` | critical | High topology-change count *and* a recent change - active STP churn |
 | `UNREACHABLE` | critical | Switch could not be audited |
 | `STP_CHURN_HISTORY` / `STP_RECENT_CHANGE` | warning | Accumulated or recent topology changes |
 | `ACCESS_NO_PORTFAST` / `ACCESS_NO_BPDUGUARD` | warning | Unprotected access/edge ports |
@@ -77,10 +77,10 @@ still treated as an uplink.
 
 Output (`out/`):
 
-- `audit.json` — full structured report (facts, interfaces, findings, configs)
-- `audit.html` — self-contained report: fleet overview, findings ranked by
+- `audit.json` - full structured report (facts, interfaces, findings, configs)
+- `audit.html` - self-contained report: fleet overview, findings ranked by
   severity, per-switch interface tables, collapsible config exports
-- `configs/<switch>.cfg` — one config export per switch
+- `configs/<switch>.cfg` - one config export per switch
 
 Exit code is `1` if any critical finding exists (usable in CI/cron), `2` on
 usage errors, otherwise `0`.
@@ -96,16 +96,38 @@ any directory of `*.cfg` files. Drift detection compares top-level config
 blocks across switches: the majority variant becomes the consensus and every
 deviation is reported as missing / extra / modified lines per switch.
 Host-specific lines (hostname, interfaces, certificates, stack provisioning,
-SNMP location...) are excluded so they don't show up as false drift.
+SNMP location...) are excluded so they don't show up as false drift. Banner
+blocks are skipped, and secrets (enable/username hashes, SNMP communities,
+tacacs/radius keys) are redacted before comparison - salted hashes differ on
+every switch even for identical passwords, so they would otherwise be pure
+false drift, and they don't belong in a shareable report anyway.
+
+### Baseline mode
+
+Majority consensus is the wrong model when the fleet is small or heterogeneous
+(e.g. one core switch plus several access switches - the core loses every
+"vote"). If you have a known-good, properly configured switch, name it as the
+baseline and every difference is reported relative to it:
+
+```
+netauditor analyze out -o out --baseline sw-access-1
+```
+
+Use `--hosts` to limit the comparison to switches that should look alike,
+so a core switch's legitimate extras don't drown the report:
+
+```
+netauditor analyze out -o out --baseline sw-access-1 --hosts sw-access-1,sw-access-2,sw-access-3
+```
 
 Extra test suites via `--tests` (comma-separated, or `all`):
 
-- `security` — telnet on VTY lines, `ip http server`, default/RW SNMP
+- `security` - telnet on VTY lines, `ip http server`, default/RW SNMP
   communities, missing `service password-encryption`, `enable password`,
   type 0/7 user passwords
-- `stp` — spanning-tree mode mismatches between switches, no deterministic
+- `stp` - spanning-tree mode mismatches between switches, no deterministic
   root bridge configured
-- `vlans` — VLANs defined on some switches but missing on others
+- `vlans` - VLANs defined on some switches but missing on others
 
 Outputs `drift.json` and `drift.html` in the same style as the audit report.
 

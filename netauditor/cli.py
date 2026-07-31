@@ -76,15 +76,23 @@ def cmd_analyze(args) -> int:
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    if args.hosts:
+        wanted = [h.strip() for h in args.hosts.split(",") if h.strip()]
+        unknown = [h for h in wanted if h not in configs]
+        if unknown:
+            print(f"error: unknown host(s) in --hosts: {', '.join(unknown)} "
+                  f"(available: {', '.join(sorted(configs))})", file=sys.stderr)
+            return 2
+        configs = {name: cfg for name, cfg in configs.items() if name in wanted}
     if len(configs) < 1:
         print("error: no configs found in source", file=sys.stderr)
         return 2
     if len(configs) < 2:
-        print("note: only one config found — drift needs 2+ switches; running tests only.")
+        print("note: only one config found - drift needs 2+ switches; running tests only.")
 
-    drift = analyzer.compute_drift(configs) if len(configs) >= 2 else \
-        {"hosts": sorted(configs), "item_count": 0, "items": []}
     try:
+        drift = analyzer.compute_drift(configs, baseline=args.baseline) if len(configs) >= 2 else \
+            {"hosts": sorted(configs), "baseline": args.baseline, "item_count": 0, "items": []}
         findings, tests_run = analyzer.run_tests(configs, args.tests)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -138,6 +146,11 @@ def main(argv=None) -> int:
                       help="comma-separated: json,html (default: both)")
     p_an.add_argument("--tests", default="",
                       help=f"extra test suites, comma-separated: {', '.join(analyzer.TESTS)}, all")
+    p_an.add_argument("--baseline", default=None, metavar="SWITCH",
+                      help="switch name whose config is the known-good reference; drift is "
+                           "reported relative to it instead of the majority consensus")
+    p_an.add_argument("--hosts", default="",
+                      help="comma-separated switch names to compare (default: all in source)")
     p_an.set_defaults(func=cmd_analyze)
 
     args = parser.parse_args(argv)

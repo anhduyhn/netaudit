@@ -110,7 +110,7 @@ def render_audit_html(audit: dict) -> str:
                         f"<td><code>{_e(f['code'])}</code></td><td>{_e(f['message'])}</td></tr>")
         body.append("</table>")
     else:
-        body.append("<p class='ok'>No findings — clean audit.</p>")
+        body.append("<p class='ok'>No findings - clean audit.</p>")
 
     # Per-host detail
     for h in hosts:
@@ -125,7 +125,7 @@ def render_audit_html(audit: dict) -> str:
                         "<th>Duplex</th><th>Speed</th><th>Uplink</th><th>PortFast</th>"
                         "<th>BPDU guard</th><th>In errs / CRC</th></tr>")
             for i in h["interfaces"]:
-                uplink = _e(i["uplink_reason"]) if i["is_uplink"] else "—"
+                uplink = _e(i["uplink_reason"]) if i["is_uplink"] else "-"
                 body.append(
                     f"<tr><td><code>{_e(i['interface'])}</code></td><td>{_e(i['description'])}</td>"
                     f"<td>{_e(i['status'])}</td><td>{_e(i['vlan'])}</td><td>{_e(i['duplex'])}</td>"
@@ -145,15 +145,17 @@ def render_audit_html(audit: dict) -> str:
 
 def render_drift_html(result: dict) -> str:
     items = result.get("drift", {}).get("items", [])
+    baseline = result.get("drift", {}).get("baseline")
     findings = result.get("findings", [])
     counts = {"critical": 0, "warning": 0, "info": 0}
     for f in findings:
         counts[f["severity"]] = counts.get(f["severity"], 0) + 1
 
+    baseline_note = f" · baseline: {_e(baseline)}" if baseline else ""
     body = [f"<h1>Config drift &amp; analysis report</h1>"
             f"<div class='meta'>Generated {_e(result.get('generated'))} · "
             f"{len(result.get('hosts', []))} switches · tests: "
-            f"{_e(', '.join(result.get('tests_run', [])) or 'none')}</div>"]
+            f"{_e(', '.join(result.get('tests_run', [])) or 'none')}{baseline_note}</div>"]
     body.append(_tiles([("Switches", len(result.get("hosts", []))),
                         ("Drift items", len(items)),
                         ("Critical", counts["critical"]),
@@ -172,14 +174,21 @@ def render_drift_html(result: dict) -> str:
 
     body.append("<h2>Config drift</h2>")
     if not items:
-        body.append("<p class='ok'>No drift — all compared config sections are identical across switches.</p>")
+        body.append("<p class='ok'>No drift - all compared config sections are identical across switches.</p>")
     for item in items:
         body.append(f"<div class='hostcard'><h3><code>{_e(item['header'])}</code></h3>")
+        if baseline and baseline in item["missing_on"]:
+            body.append("<p class='bad'>Not on the baseline (extra config on the switches below)</p>")
         if item["missing_on"]:
             body.append(f"<p class='bad'>Missing on: {_e(', '.join(item['missing_on']))}</p>")
         for v, variant in enumerate(item["variants"]):
-            label = "consensus" if v == 0 else f"variant {v}"
-            body.append(f"<p><b>{_e(label)}</b> — {_e(', '.join(variant['hosts']))}</p>")
+            if variant.get("is_baseline"):
+                label = f"baseline ({baseline})"
+            elif baseline:
+                label = f"differs (variant {v + 1})"
+            else:
+                label = "consensus" if v == 0 else f"variant {v}"
+            body.append(f"<p><b>{_e(label)}</b> - {_e(', '.join(variant['hosts']))}</p>")
             if variant["children"]:
                 lines = []
                 for line in variant["children"]:
