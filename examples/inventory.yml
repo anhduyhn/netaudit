@@ -1,0 +1,18 @@
+# netauditor inventory (YAML form).
+# 'defaults' apply to every host; inline per-host values take priority.
+defaults:
+  username: audituser
+  password: changeme        # better: omit and use NETAUDITOR_PASSWORD or the interactive prompt
+  device_type: cisco_ios    # any netmiko device_type
+  port: 22
+
+hosts:
+  - host: 10.10.0.11
+    name: sw-core-1
+  - host: 10.10.0.12
+    name: sw-access-1
+  - host: 10.10.0.13
+    name: sw-access-2
+    username: localadmin    # inline credentials override the defaults
+    password: different
+  - host: 10.10.0.14        # name optional; hostname is taken from the device prompt
