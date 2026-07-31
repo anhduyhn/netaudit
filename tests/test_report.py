@@ -49,8 +49,10 @@ class TestAuditHtml(unittest.TestCase):
         self.assertIn("data-sev='critical'", self.html)
         self.assertIn("addEventListener", self.html)
 
-    def test_tables_are_searchable(self):
-        self.assertIn("table class='searchable'", self.html)
+    def test_tables_are_searchable_and_categorised(self):
+        self.assertIn("data-cat='switches'", self.html)
+        self.assertIn("data-cat='findings'", self.html)
+        self.assertIn("data-cat='interfaces'", self.html)
 
     def test_untrusted_text_is_escaped(self):
         self.assertNotIn("<script>alert(1)</script>", self.html)
@@ -68,6 +70,10 @@ class TestDriftHtml(unittest.TestCase):
     def test_baseline_labelled(self):
         self.assertIn("baseline (sw1)", self.html)
         self.assertIn("baseline: sw1", self.html)
+
+    def test_drift_cards_categorised(self):
+        self.assertIn("data-cat='drift'", self.html)
+        self.assertIn("data-cat='findings'", self.html)
 
 
 if __name__ == "__main__":

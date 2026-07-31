@@ -69,18 +69,23 @@ _FILTER_JS = """
   function apply() {
     var text = q.value.trim().toLowerCase();
     if (text) document.querySelectorAll('details').forEach(function (d) { d.open = true; });
-    var shown = 0, total = 0;
+    var stats = {}, order = [];
     targets().forEach(function (el) {
+      var holder = el.hasAttribute('data-cat') ? el : el.closest('[data-cat]');
+      var cat = holder ? holder.getAttribute('data-cat') : 'items';
+      if (!stats[cat]) { stats[cat] = { shown: 0, total: 0 }; order.push(cat); }
       var okText = !text || el.textContent.toLowerCase().indexOf(text) !== -1;
       var badge = el.querySelector('.badge');
       var okSev = sev === 'all' || !badge || el.querySelector('.sev-' + sev) !== null;
-      total++;
+      stats[cat].total++;
       var show = okText && okSev;
       el.classList.toggle('hidden', !show);
-      if (show) shown++;
+      if (show) stats[cat].shown++;
     });
     document.getElementById('matchcount').textContent =
-      (text || sev !== 'all') ? shown + ' of ' + total + ' items shown' : '';
+      (text || sev !== 'all')
+        ? order.map(function (c) { return c + ' ' + stats[c].shown + '/' + stats[c].total; }).join('  ·  ')
+        : '';
   }
   q.addEventListener('input', apply);
   chips.forEach(function (c) {
@@ -149,7 +154,7 @@ def render_audit_html(audit: dict) -> str:
     body.append(_toolbar("Filter: switch, port, code, text..."))
 
     # Fleet overview
-    body.append("<h2>Fleet overview</h2><table class='searchable'><tr><th>Switch</th><th>Host</th><th>Model</th>"
+    body.append("<h2>Fleet overview</h2><table class='searchable' data-cat='switches'><tr><th>Switch</th><th>Host</th><th>Model</th>"
                 "<th>IOS</th><th>Uptime</th><th>STP mode</th><th>Critical</th><th>Warnings</th></tr>")
     for h in hosts:
         hc = sum(1 for f in h.get("findings", []) if f["severity"] == "critical")
@@ -167,7 +172,7 @@ def render_audit_html(audit: dict) -> str:
     body.append("<h2>Findings</h2>")
     if all_findings:
         all_findings.sort(key=lambda hf: (_SEV_ORDER.get(hf[1]["severity"], 9), hf[0]["name"]))
-        body.append("<table class='searchable'><tr><th>Severity</th><th>Switch</th><th>Interface</th>"
+        body.append("<table class='searchable' data-cat='findings'><tr><th>Severity</th><th>Switch</th><th>Interface</th>"
                     "<th>Code</th><th>Message</th></tr>")
         for h, f in all_findings:
             body.append(f"<tr><td>{_badge(f['severity'])}</td><td>{_e(h['name'])}</td>"
@@ -181,12 +186,12 @@ def render_audit_html(audit: dict) -> str:
     for h in hosts:
         body.append(f"<h2>{_e(h['name'])} <span class='small'>({_e(h['host'])})</span></h2>")
         if h.get("error"):
-            body.append(f"<div class='hostcard bad'>Unreachable: {_e(h['error'])}</div>")
+            body.append(f"<div class='hostcard bad' data-cat='switches'>Unreachable: {_e(h['error'])}</div>")
             continue
         if h.get("interfaces"):
             body.append("<details><summary>Interfaces ("
                         f"{len(h['interfaces'])})</summary>"
-                        "<table class='searchable'><tr><th>Port</th><th>Description</th><th>Status</th><th>VLAN</th>"
+                        "<table class='searchable' data-cat='interfaces'><tr><th>Port</th><th>Description</th><th>Status</th><th>VLAN</th>"
                         "<th>Duplex</th><th>Speed</th><th>Uplink</th><th>PortFast</th>"
                         "<th>BPDU guard</th><th>In errs / CRC</th></tr>")
             for i in h["interfaces"]:
@@ -230,7 +235,7 @@ def render_drift_html(result: dict) -> str:
     body.append("<h2>Analysis findings</h2>")
     if findings:
         findings = sorted(findings, key=lambda f: (_SEV_ORDER.get(f["severity"], 9), f.get("host", "")))
-        body.append("<table class='searchable'><tr><th>Severity</th><th>Switch</th><th>Code</th><th>Message</th></tr>")
+        body.append("<table class='searchable' data-cat='findings'><tr><th>Severity</th><th>Switch</th><th>Code</th><th>Message</th></tr>")
         for f in findings:
             body.append(f"<tr><td>{_badge(f['severity'])}</td><td>{_e(f.get('host'))}</td>"
                         f"<td><code>{_e(f['code'])}</code></td><td>{_e(f['message'])}</td></tr>")
@@ -242,7 +247,7 @@ def render_drift_html(result: dict) -> str:
     if not items:
         body.append("<p class='ok'>No drift - all compared config sections are identical across switches.</p>")
     for item in items:
-        body.append(f"<div class='hostcard'><h3><code>{_e(item['header'])}</code></h3>")
+        body.append(f"<div class='hostcard' data-cat='drift'><h3><code>{_e(item['header'])}</code></h3>")
         if baseline and baseline in item["missing_on"]:
             body.append("<p class='bad'>Not on the baseline (extra config on the switches below)</p>")
         if item["missing_on"]:
