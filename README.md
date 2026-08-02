@@ -207,13 +207,16 @@ pipx install git+https://github.com/anhduyhn/netaudit.git
 
 (or `pip install git+...`). That puts a `netauditor` command on their PATH.
 
-**They have nothing** - build the standalone Windows exe and hand it over:
+**They have nothing** - point them at the standalone Windows exe on the
+[releases page](https://github.com/anhduyhn/netaudit/releases) (built and
+attached automatically by CI whenever a `v*` tag is pushed:
+`git tag v0.2.0 && git push origin v0.2.0`). To build it locally instead:
 
 ```
 powershell -ExecutionPolicy Bypass -File packaging\build-exe.ps1
 ```
 
-This produces `dist\netauditor.exe` (~15 MB, no Python required). Share the exe
+Either way you get `netauditor.exe` (~15 MB, no Python required). Share the exe
 together with an inventory file (start from [examples/inventory.yml](examples/inventory.yml));
 the recipient runs:
 
