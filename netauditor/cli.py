@@ -191,6 +191,29 @@ def cmd_analyze(args) -> int:
     return 1 if criticals else 0
 
 
+def cmd_connect(args) -> int:
+    try:
+        hosts = load_inventory(args.inventory, prompt_missing=not args.no_prompt)
+    except InventoryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    hosts, err = _filter_by_group(hosts, lambda h: h.group, args.group)
+    if err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+
+    from . import connect
+
+    matches = connect.match_hosts(hosts, args.target)
+    if not matches:
+        print(f"error: nothing in the inventory matches '{args.target}'", file=sys.stderr)
+        return 2
+    chosen = matches[0] if len(matches) == 1 else connect.choose_host(matches)
+    if chosen is None:
+        return 2
+    return connect.open_session(chosen)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="netauditor",
@@ -228,6 +251,18 @@ def main(argv=None) -> int:
     p_an.add_argument("--hosts", default="",
                       help="comma-separated switch names to compare (default: all in source)")
     p_an.set_defaults(func=cmd_analyze)
+
+    p_conn = sub.add_parser("connect",
+                            help="open a live SSH session to a switch using inventory credentials")
+    p_conn.add_argument("target", nargs="?", default="",
+                        help="switch name or IP (substring is fine); omit to pick from a list")
+    p_conn.add_argument("-i", "--inventory", required=True,
+                        help="inventory file (YAML or plain text)")
+    p_conn.add_argument("-g", "--group", default="",
+                        help="limit the candidates to these groups/campuses, comma-separated")
+    p_conn.add_argument("--no-prompt", action="store_true",
+                        help="never prompt for credentials (fail instead)")
+    p_conn.set_defaults(func=cmd_connect)
 
     args = parser.parse_args(argv)
     if getattr(args, "tests", None) is not None and isinstance(args.tests, str):

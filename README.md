@@ -179,6 +179,20 @@ Extra test suites via `--tests` (comma-separated, or `all`):
 
 Outputs `drift.json` and `drift.html` in the same style as the audit report.
 
+## 3. Connect (live SSH session)
+
+```
+netauditor connect sw-lib-02 -i inventory.yml
+netauditor connect -i inventory.yml -g sydenham
+```
+
+Opens a real interactive SSH session to a switch using the credentials already
+in the inventory - no separate PuTTY profile or password lookup. The target can
+be a name, an IP, or any substring of either; with several matches (or no
+target at all) you get a numbered list to pick from. Type `exit` on the switch
+to end the session. Ctrl+C is passed through to the switch, and arrow keys /
+history work as normal. Host keys are auto-accepted, same policy as the audit.
+
 ## Typical workflow
 
 ```
