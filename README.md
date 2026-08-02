@@ -182,6 +182,38 @@ start out\audit.html
   rather than crashing the audit.
 - Run it with a read-only account; the tool only issues `show` commands.
 
+## Sharing the tool
+
+Two options depending on the recipient:
+
+**They have Python** - install straight from the repo (needs repo access):
+
+```
+pipx install git+https://github.com/anhduyhn/netaudit.git
+```
+
+(or `pip install git+...`). That puts a `netauditor` command on their PATH.
+
+**They have nothing** - build the standalone Windows exe and hand it over:
+
+```
+powershell -ExecutionPolicy Bypass -File packaging\build-exe.ps1
+```
+
+This produces `dist\netauditor.exe` (~15 MB, no Python required). Share the exe
+together with an inventory file (start from [examples/inventory.yml](examples/inventory.yml));
+the recipient runs:
+
+```
+netauditor.exe audit -i inventory.yml -o out
+netauditor.exe analyze out -o out --tests all
+```
+
+Notes: the exe is Windows-only (build on the OS you target); unsigned exes may
+trigger a SmartScreen "unrecognized app" prompt on first run - "More info" >
+"Run anyway"; never bundle a filled-in inventory (credentials) alongside a
+shared exe - send the template and let recipients add their own.
+
 ## Development
 
 ```
