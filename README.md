@@ -216,7 +216,11 @@ attached automatically by CI whenever a `v*` tag is pushed:
 powershell -ExecutionPolicy Bypass -File packaging\build-exe.ps1
 ```
 
-Either way you get `netauditor.exe` (~15 MB, no Python required). Share the exe
+Either way you get `netauditor.exe` (~15 MB, no Python required). It is a
+command-line tool - double-clicking the exe alone just flashes a console. For
+non-terminal users, releases also include `run-audit.bat` and the inventory
+template: put all three files in one folder, fill in `inventory.yml`, and
+double-click `run-audit.bat` - it audits, analyzes, and opens the HTML report. Share the exe
 together with an inventory file (start from [examples/inventory.yml](examples/inventory.yml));
 the recipient runs:
 
