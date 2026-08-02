@@ -302,6 +302,27 @@ def _check_config_hygiene(config: str, line_blocks: "dict[str, list]") -> "list[
 _STARTUP_HEADER_RE = re.compile(r"^Using \d+ out of \d+ bytes")
 
 
+def _strip_cert_chains(text: str) -> str:
+    """Drop 'crypto pki certificate chain' blocks.
+
+    Self-signed certificates regenerate at boot when they were never saved, so
+    the running config carries a certificate the startup config lacks on nearly
+    every switch - pure false drift for the saved-config check.
+    """
+    out = []
+    in_chain = False
+    for line in (text or "").splitlines():
+        if in_chain:
+            if line.startswith(" ") or not line.strip():
+                continue
+            in_chain = False
+        if line.startswith("crypto pki certificate chain"):
+            in_chain = True
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
 def _check_saved_config(running: str, startup) -> "list[Finding]":
     """Diff running vs startup config; unsaved changes vanish at the next reboot."""
     if not running or startup is None:
@@ -313,17 +334,29 @@ def _check_saved_config(running: str, startup) -> "list[Finding]":
             "UNSAVED_CHANGES", "warning",
             "No startup-config is saved at all - the entire configuration is lost on "
             "reboot. Run 'copy running-config startup-config'.")]
-    run_lines = set(normalize_config(running).splitlines())
-    start_lines = {l for l in normalize_config(startup).splitlines()
+    run_lines = set(normalize_config(_strip_cert_chains(running)).splitlines())
+    start_lines = {l for l in normalize_config(_strip_cert_chains(startup)).splitlines()
                    if not _STARTUP_HEADER_RE.match(l)}
-    diff = run_lines ^ start_lines
-    if diff:
-        return [Finding(
-            "UNSAVED_CHANGES", "warning",
-            f"Running config differs from startup-config ({len(diff)} line(s) differ) - "
-            "unsaved changes are lost at the next reboot. Run "
-            "'copy running-config startup-config'.")]
-    return []
+    added = sorted(run_lines - start_lines)      # unsaved changes
+    removed = sorted(start_lines - run_lines)    # saved lines since deleted/changed
+    if not added and not removed:
+        return []
+
+    def examples(lines):
+        shown = "; ".join(f"'{l.strip()[:60]}'" for l in lines[:3])
+        return shown + (" ..." if len(lines) > 3 else "")
+
+    parts = []
+    if added:
+        parts.append(f"only in running: {examples(added)}")
+    if removed:
+        parts.append(f"only in startup: {examples(removed)}")
+    return [Finding(
+        "UNSAVED_CHANGES", "warning",
+        f"Running config differs from startup-config ({len(added)} added, "
+        f"{len(removed)} removed - {' | '.join(parts)}). Unsaved changes are lost at "
+        "the next reboot; run 'copy running-config startup-config'.",
+        detail={"added": added[:40], "removed": removed[:40]})]
 
 
 def _check_mac_flaps(flaps: "list[dict]") -> "list[Finding]":

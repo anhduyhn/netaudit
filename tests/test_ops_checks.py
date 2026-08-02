@@ -49,6 +49,24 @@ class TestUnsavedChanges(unittest.TestCase):
         self.assertNotIn("UNSAVED_CHANGES", findings_for({"startup_config": ""}))
         self.assertNotIn("UNSAVED_CHANGES", findings_for({}))
 
+    def test_regenerated_self_signed_cert_is_not_unsaved_change(self):
+        cert_block = ("crypto pki certificate chain TP-self-signed-1234567890\n"
+                      " certificate self-signed 01\n"
+                      "  30820229 30820192 A0030201 02020101 300D0609 2A864886 F70D0101\n"
+                      "  05050030 2D312B30 29060355 04031322 494F532D 53656C66 2D536967\n"
+                      "  quit\n")
+        running = cert_block + RUNNING
+        self.assertNotIn("UNSAVED_CHANGES",
+                         findings_for({"running_config": running,
+                                       "startup_config": STARTUP_SAME}))
+
+    def test_diff_shows_example_lines_and_detail(self):
+        f = findings_for({"startup_config": STARTUP_STALE})["UNSAVED_CHANGES"]
+        self.assertIn("only in running:", f["message"])
+        self.assertIn("ntp server 10.0.0.1", f["message"])
+        self.assertIn("ntp server 10.0.0.1", f["detail"]["added"])
+        self.assertEqual(f["detail"]["removed"], [])
+
 
 class TestMacFlapping(unittest.TestCase):
     def test_parser_normalizes_ports(self):
