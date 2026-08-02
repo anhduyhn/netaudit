@@ -36,6 +36,7 @@ class Host:
     secret: str = ""  # enable secret; optional
     device_type: str = "cisco_ios"
     port: int = 22
+    group: str = ""  # campus/site; "" means ungrouped
 
     def display_name(self) -> str:
         return self.name or self.host
@@ -70,18 +71,17 @@ def _load_yaml(path: Path) -> "list[Host]":
     if isinstance(data, list):  # bare list of hosts is also accepted
         data = {"hosts": data}
     if not isinstance(data, dict):
-        raise InventoryError(f"{path}: expected a mapping with 'hosts' (and optional 'defaults')")
+        raise InventoryError(f"{path}: expected a mapping with 'hosts' or 'groups'")
     defaults = data.get("defaults") or {}
-    entries = data.get("hosts")
-    if not isinstance(entries, list):
-        raise InventoryError(f"{path}: 'hosts' must be a list")
     hosts = []
-    for entry in entries:
+
+    def add(entry, group="", group_defaults=None):
         if isinstance(entry, str):
             entry = {"host": entry}
         if not isinstance(entry, dict) or not entry.get("host"):
             raise InventoryError(f"{path}: each host needs at least a 'host' address: {entry!r}")
         merged = dict(defaults)
+        merged.update(group_defaults or {})
         merged.update({k: v for k, v in entry.items() if v is not None})
         hosts.append(
             Host(
@@ -92,20 +92,46 @@ def _load_yaml(path: Path) -> "list[Host]":
                 secret=str(merged.get("secret", "") or ""),
                 device_type=str(merged.get("device_type", "cisco_ios") or "cisco_ios"),
                 port=int(merged.get("port", 22) or 22),
+                group=str(merged.get("group", group) or ""),
             )
         )
+
+    entries = data.get("hosts")
+    if entries is not None and not isinstance(entries, list):
+        raise InventoryError(f"{path}: 'hosts' must be a list")
+    for entry in entries or []:
+        add(entry)
+
+    groups = data.get("groups") or {}
+    if not isinstance(groups, dict):
+        raise InventoryError(f"{path}: 'groups' must be a mapping of group name to hosts")
+    for gname, gdata in groups.items():
+        if isinstance(gdata, list):
+            gdata = {"hosts": gdata}
+        if not isinstance(gdata, dict):
+            raise InventoryError(f"{path}: group '{gname}' must be a list or mapping")
+        for entry in gdata.get("hosts") or []:
+            add(entry, group=str(gname), group_defaults=gdata.get("defaults") or {})
     return hosts
 
 
 def _load_plain(path: Path) -> "list[Host]":
-    """Plain text: one host per line, 'ip[,username[,password]]' (comma or whitespace separated)."""
+    """Plain text: one host per line, 'ip[,username[,password]]'.
+
+    An INI-style '[groupname]' line starts a group; hosts below it belong to
+    that group until the next section header.
+    """
     hosts = []
+    group = ""
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
+        if line.startswith("[") and line.endswith("]"):
+            group = line[1:-1].strip()
+            continue
         parts = [p.strip() for p in (line.split(",") if "," in line else line.split())]
-        host = Host(host=parts[0])
+        host = Host(host=parts[0], group=group)
         if len(parts) > 1:
             host.username = parts[1]
         if len(parts) > 2:

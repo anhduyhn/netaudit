@@ -1,6 +1,12 @@
 # Plain-text inventory: one host per line, "ip[,username[,password]]".
 # Hosts without inline credentials use NETAUDITOR_USERNAME/NETAUDITOR_PASSWORD
 # or the interactive prompt.
+# An INI-style [section] assigns the hosts below it to a campus/group.
 10.10.0.11
-10.10.0.12
-10.10.0.13,localadmin,different
+
+[sydenham]
+10.1.0.11
+10.1.0.12,localadmin,different
+
+[delahey]
+10.2.0.11

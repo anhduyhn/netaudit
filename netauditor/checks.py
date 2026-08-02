@@ -35,6 +35,7 @@ def build_host_report(result: dict) -> dict:
     report = {
         "host": result["host"],
         "name": name,
+        "group": result.get("group", ""),
         "error": result.get("error"),
         "command_errors": result.get("command_errors", {}),
         "facts": {},

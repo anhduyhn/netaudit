@@ -37,7 +37,25 @@ hosts:
     password: different
 ```
 
-Plain text also works: one `ip[,username[,password]]` per line.
+Plain text also works: one `ip[,username[,password]]` per line, with optional
+INI-style `[campus]` sections.
+
+### Campus / site groups
+
+Hosts can be grouped by campus, either with a `groups:` mapping (as above, with
+optional per-group `defaults`), a per-host `group:` key, or `[section]` headers
+in plain-text inventories. Both subcommands take `-g/--group` to operate on a
+subset; no flag means everything:
+
+```
+netauditor audit -i inventory.yml -g sydenham
+netauditor analyze out -g sydenham --tests all
+```
+
+`analyze -g` needs an `audit.json` source (raw `.cfg` directories carry no
+group information). The audit report shows a campus column and gains a campus
+dropdown in the filter toolbar, so a whole-fleet audit can still be read one
+campus at a time.
 
 Credential precedence: inline per-host → inventory `defaults` →
 `NETAUDITOR_USERNAME` / `NETAUDITOR_PASSWORD` / `NETAUDITOR_SECRET` environment

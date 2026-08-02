@@ -8,7 +8,7 @@ def minimal_audit():
         "generated": "2026-07-31T12:00:00",
         "tool_version": "0.1.0",
         "hosts": [{
-            "host": "10.0.0.1", "name": "sw1", "error": None,
+            "host": "10.0.0.1", "name": "sw1", "group": "sydenham", "error": None,
             "facts": {"model": "WS-C2960X", "version": "15.2", "uptime": "1 week"},
             "stp": {"mode": "rapid-pvst"},
             "interfaces": [{
@@ -58,6 +58,12 @@ class TestAuditHtml(unittest.TestCase):
     def test_findings_grouped_by_code(self):
         self.assertIn("class='findgroup' open", self.html)  # critical group starts open
         self.assertIn("data-code='X'", self.html)
+
+    def test_campus_tagging(self):
+        self.assertIn("id='groupsel'", self.html)
+        self.assertIn("data-group='sydenham'", self.html)
+        self.assertIn("<th>Campus</th>", self.html)
+        self.assertIn("class='hostsection'", self.html)
 
     def test_untrusted_text_is_escaped(self):
         self.assertNotIn("<script>alert(1)</script>", self.html)

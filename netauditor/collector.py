@@ -20,7 +20,8 @@ def collect_host(host, timeout: int = 30) -> dict:
     # Imported lazily so parsing/analysis (and tests) work without netmiko installed.
     from netmiko import ConnectHandler
 
-    result = {"host": host.host, "name": host.display_name(), "error": None, "outputs": {}}
+    result = {"host": host.host, "name": host.display_name(), "group": host.group,
+              "error": None, "outputs": {}}
     device = {
         "device_type": host.device_type,
         "host": host.host,

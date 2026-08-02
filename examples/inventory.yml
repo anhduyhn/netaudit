@@ -1,18 +1,31 @@
 # netauditor inventory (YAML form).
-# 'defaults' apply to every host; inline per-host values take priority.
+# 'defaults' apply to every host; group defaults override them; inline per-host
+# values take priority over both.
 defaults:
   username: audituser
   password: changeme        # better: omit and use NETAUDITOR_PASSWORD or the interactive prompt
   device_type: cisco_ios    # any netmiko device_type
   port: 22
 
+# Campus/site groups. Audit one with: netauditor audit -i inventory.yml -g sydenham
+groups:
+  sydenham:
+    defaults:
+      username: syd-audit   # optional per-group defaults
+    hosts:
+      - host: 10.1.0.11
+        name: sy-sw-core-1
+      - host: 10.1.0.12
+  delahey:
+    hosts:
+      - host: 10.2.0.11
+        name: de-sw-core-1
+      - host: 10.2.0.12
+        username: localadmin    # inline credentials override all defaults
+        password: different
+
+# Ungrouped hosts (always audited); a per-host 'group' key also works.
 hosts:
-  - host: 10.10.0.11
-    name: sw-core-1
-  - host: 10.10.0.12
-    name: sw-access-1
-  - host: 10.10.0.13
-    name: sw-access-2
-    username: localadmin    # inline credentials override the defaults
-    password: different
-  - host: 10.10.0.14        # name optional; hostname is taken from the device prompt
+  - host: 10.9.0.14
+  - host: 10.9.0.15
+    group: kingspark

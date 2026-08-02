@@ -27,16 +27,39 @@ def _parse_formats(value: str) -> "list[str]":
     return formats or ["json", "html"]
 
 
+def _filter_by_group(items, group_of, requested: str):
+    """Filter items by comma-separated group names (case-insensitive).
+
+    Returns (filtered_items, error_message). No requested groups means no filtering.
+    """
+    wanted = {g.strip().lower() for g in requested.split(",") if g.strip()}
+    if not wanted:
+        return items, None
+    available = {group_of(i).lower() for i in items if group_of(i)}
+    if not available:
+        return items, "no campus/group information in the source (add groups to the inventory)"
+    unknown = sorted(wanted - available)
+    if unknown:
+        return items, (f"unknown group(s): {', '.join(unknown)} "
+                       f"(available: {', '.join(sorted(available))})")
+    return [i for i in items if group_of(i).lower() in wanted], None
+
+
 def cmd_audit(args) -> int:
     try:
         hosts = load_inventory(args.inventory, prompt_missing=not args.no_prompt)
     except InventoryError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    hosts, err = _filter_by_group(hosts, lambda h: h.group, args.group)
+    if err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
 
     from .collector import collect_all  # deferred so `analyze` works without netmiko
 
-    print(f"Auditing {len(hosts)} switch(es) with {args.workers} worker(s)...")
+    scope = f" in group(s) {args.group}" if args.group else ""
+    print(f"Auditing {len(hosts)} switch(es){scope} with {args.workers} worker(s)...")
 
     def progress(result):
         state = f"FAILED ({result['error']})" if result.get("error") else "collected"
@@ -72,10 +95,16 @@ def cmd_audit(args) -> int:
 
 def cmd_analyze(args) -> int:
     try:
-        configs = analyzer.load_configs(args.source)
+        configs, groups = analyzer.load_configs(args.source)
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    if args.group:
+        names, err = _filter_by_group(sorted(configs), lambda n: groups.get(n, ""), args.group)
+        if err:
+            print(f"error: {err}", file=sys.stderr)
+            return 2
+        configs = {n: c for n, c in configs.items() if n in set(names)}
     if args.hosts:
         wanted = [h.strip() for h in args.hosts.split(",") if h.strip()]
         unknown = [h for h in wanted if h not in configs]
@@ -102,6 +131,8 @@ def cmd_analyze(args) -> int:
         "generated": _now(),
         "tool_version": __version__,
         "hosts": drift["hosts"],
+        "groups": {n: groups.get(n, "") for n in configs},
+        "group_filter": args.group or "",
         "tests_run": tests_run,
         "drift": drift,
         "findings": findings,
@@ -135,6 +166,9 @@ def main(argv=None) -> int:
                          help="comma-separated: json,html (default: both)")
     p_audit.add_argument("--workers", type=int, default=8, help="parallel SSH sessions (default: 8)")
     p_audit.add_argument("--timeout", type=int, default=30, help="per-command timeout seconds (default: 30)")
+    p_audit.add_argument("-g", "--group", default="",
+                         help="audit only these inventory groups/campuses, comma-separated "
+                              "(default: all hosts)")
     p_audit.add_argument("--no-prompt", action="store_true",
                          help="never prompt for credentials (fail instead)")
     p_audit.set_defaults(func=cmd_audit)
@@ -149,6 +183,9 @@ def main(argv=None) -> int:
     p_an.add_argument("--baseline", default=None, metavar="SWITCH",
                       help="switch name whose config is the known-good reference; drift is "
                            "reported relative to it instead of the majority consensus")
+    p_an.add_argument("-g", "--group", default="",
+                      help="analyze only these groups/campuses, comma-separated "
+                           "(default: all; requires an audit.json source with groups)")
     p_an.add_argument("--hosts", default="",
                       help="comma-separated switch names to compare (default: all in source)")
     p_an.set_defaults(func=cmd_analyze)

@@ -66,6 +66,7 @@ _FILTER_JS = """
   if (!q) return;
   var chips = document.querySelectorAll('.chip');
   var codeSel = document.getElementById('codesel');
+  var groupSel = document.getElementById('groupsel');
   var sev = 'all';
 
   if (codeSel) {
@@ -82,6 +83,21 @@ _FILTER_JS = """
       codeSel.appendChild(o);
     });
     if (!names.length) codeSel.classList.add('hidden');
+  }
+  if (groupSel) {
+    var groupNames = {};
+    document.querySelectorAll('[data-group]').forEach(function (el) {
+      var g = el.getAttribute('data-group');
+      if (g) groupNames[g] = true;
+    });
+    var gs = Object.keys(groupNames).sort();
+    gs.forEach(function (g) {
+      var o = document.createElement('option');
+      o.value = g;
+      o.textContent = g;
+      groupSel.appendChild(o);
+    });
+    if (!gs.length) groupSel.classList.add('hidden');
   }
 
   function targets() {
@@ -101,6 +117,7 @@ _FILTER_JS = """
   function apply() {
     var text = q.value.trim().toLowerCase();
     var code = codeSel ? codeSel.value : 'all';
+    var grp = groupSel ? groupSel.value : 'all';
     if (text) document.querySelectorAll('details').forEach(function (d) { d.open = true; });
     var stats = {}, order = [];
     targets().forEach(function (el) {
@@ -114,8 +131,11 @@ _FILTER_JS = """
       var okSev = sev === 'all' || s === null || s === sev;
       var elCode = el.getAttribute('data-code');
       var okCode = code === 'all' || !elCode || elCode === code;
+      var gHolder = el.hasAttribute('data-group') ? el : el.closest('[data-group]');
+      var g = gHolder ? gHolder.getAttribute('data-group') : null;
+      var okGroup = grp === 'all' || !g || g === grp;
       stats[cat].total++;
-      var show = okText && okSev && okCode;
+      var show = okText && okSev && okCode && okGroup;
       el.classList.toggle('hidden', !show);
       if (show) stats[cat].shown++;
     });
@@ -123,13 +143,19 @@ _FILTER_JS = """
     document.querySelectorAll('.findgroup').forEach(function (g) {
       g.classList.toggle('hidden', !g.querySelector('tr:not(.hidden) td'));
     });
+    // per-switch detail sections follow the campus selector
+    document.querySelectorAll('.hostsection').forEach(function (hs) {
+      var g = hs.getAttribute('data-group');
+      hs.classList.toggle('hidden', grp !== 'all' && !!g && g !== grp);
+    });
     document.getElementById('matchcount').textContent =
-      (text || sev !== 'all' || code !== 'all')
+      (text || sev !== 'all' || code !== 'all' || grp !== 'all')
         ? order.map(function (c) { return c + ' ' + stats[c].shown + '/' + stats[c].total; }).join('  ·  ')
         : '';
   }
   q.addEventListener('input', apply);
   if (codeSel) codeSel.addEventListener('change', apply);
+  if (groupSel) groupSel.addEventListener('change', apply);
   chips.forEach(function (c) {
     c.addEventListener('click', function () {
       chips.forEach(function (x) { x.classList.remove('active'); });
@@ -191,6 +217,7 @@ def _toolbar(placeholder: str) -> str:
             f"<button class='chip' data-sev='warning'>Warning</button>"
             f"<button class='chip' data-sev='info'>Info</button>"
             f"<select id='codesel'><option value='all'>All codes</option></select>"
+            f"<select id='groupsel'><option value='all'>All campuses</option></select>"
             f"<span id='matchcount'></span></div>")
 
 
@@ -249,14 +276,19 @@ def render_audit_html(audit: dict) -> str:
     body.append(_toolbar("Filter: switch, port, code, text..."))
 
     # Fleet overview
-    body.append("<h2>Fleet overview</h2><table class='searchable' data-cat='switches'><tr><th>Switch</th><th>Host</th><th>Model</th>"
+    any_groups = any(h.get("group") for h in hosts)
+    campus_th = "<th>Campus</th>" if any_groups else ""
+    body.append("<h2>Fleet overview</h2><table class='searchable' data-cat='switches'>"
+                f"<tr><th>Switch</th>{campus_th}<th>Host</th><th>Model</th>"
                 "<th>IOS</th><th>Uptime</th><th>STP mode</th><th>Critical</th><th>Warnings</th></tr>")
     for h in hosts:
         hc = sum(1 for f in h.get("findings", []) if f["severity"] == "critical")
         hw = sum(1 for f in h.get("findings", []) if f["severity"] == "warning")
         facts = h.get("facts", {})
+        campus_td = f"<td>{_e(h.get('group'))}</td>" if any_groups else ""
         body.append(
-            f"<tr><td><b>{_e(h['name'])}</b></td><td>{_e(h['host'])}</td>"
+            f"<tr data-group='{_e(h.get('group', ''))}'><td><b>{_e(h['name'])}</b></td>{campus_td}"
+            f"<td>{_e(h['host'])}</td>"
             f"<td>{_e(facts.get('model'))}</td><td>{_e(facts.get('version'))}</td>"
             f"<td>{_e(facts.get('uptime'))}</td><td>{_e(h.get('stp', {}).get('mode'))}</td>"
             f"<td class='{'bad' if hc else 'ok'}'>{hc}</td>"
@@ -266,12 +298,14 @@ def render_audit_html(audit: dict) -> str:
     # Findings grouped by code, most severe / most frequent first
     body.append("<h2>Findings</h2>")
     if all_findings:
-        combined = sorted((dict(f, switch=h["name"]) for h, f in all_findings),
+        combined = sorted((dict(f, switch=h["name"], group=h.get("group", ""))
+                           for h, f in all_findings),
                           key=lambda f: (f["switch"], f.get("interface") or ""))
         body.append(_finding_groups(
             combined,
             ["Switch", "Interface", "Message"],
-            lambda f: (f"<tr data-sev='{_e(f['severity'])}' data-code='{_e(f['code'])}'>"
+            lambda f: (f"<tr data-sev='{_e(f['severity'])}' data-code='{_e(f['code'])}'"
+                       f" data-group='{_e(f.get('group', ''))}'>"
                        f"<td>{_e(f['switch'])}</td><td><code>{_e(f.get('interface'))}</code></td>"
                        f"<td>{_e(f['message'])}</td></tr>")))
     else:
@@ -279,9 +313,11 @@ def render_audit_html(audit: dict) -> str:
 
     # Per-host detail
     for h in hosts:
-        body.append(f"<h2>{_e(h['name'])} <span class='small'>({_e(h['host'])})</span></h2>")
+        campus = f" · {_e(h['group'])}" if h.get("group") else ""
+        body.append(f"<div class='hostsection' data-group='{_e(h.get('group', ''))}'>"
+                    f"<h2>{_e(h['name'])} <span class='small'>({_e(h['host'])}{campus})</span></h2>")
         if h.get("error"):
-            body.append(f"<div class='hostcard bad' data-cat='switches'>Unreachable: {_e(h['error'])}</div>")
+            body.append(f"<div class='hostcard bad' data-cat='switches'>Unreachable: {_e(h['error'])}</div></div>")
             continue
         if h.get("interfaces"):
             body.append("<details><summary>Interfaces ("
@@ -302,6 +338,7 @@ def render_audit_html(audit: dict) -> str:
         if h.get("config"):
             body.append(f"<details><summary>Running config</summary>"
                         f"<pre>{_e(h['config'])}</pre></details>")
+        body.append("</div>")
 
     return _page("Switch audit report", "".join(body))
 
@@ -317,6 +354,8 @@ def render_drift_html(result: dict) -> str:
         counts[f["severity"]] = counts.get(f["severity"], 0) + 1
 
     baseline_note = f" · baseline: {_e(baseline)}" if baseline else ""
+    if result.get("group_filter"):
+        baseline_note += f" · campus: {_e(result['group_filter'])}"
     body = [f"<h1>Config drift &amp; analysis report</h1>"
             f"<div class='meta'>Generated {_e(result.get('generated'))} · "
             f"{len(result.get('hosts', []))} switches · tests: "

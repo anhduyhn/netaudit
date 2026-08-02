@@ -35,10 +35,13 @@ _EXCLUDED_HEADER_PREFIXES = (
 )
 
 
-def load_configs(source) -> "dict[str, str]":
-    """Return {switch_name: config_text} from an audit.json or a directory of config files."""
+def load_configs(source) -> "tuple[dict, dict]":
+    """Return ({switch: config_text}, {switch: group}) from an audit.json or a config directory.
+
+    Directories of raw .cfg files carry no group information (groups are empty).
+    """
     source = Path(source)
-    configs = {}
+    configs, groups = {}, {}
     if source.is_dir():
         audit_json = source / "audit.json"
         if audit_json.exists():
@@ -46,14 +49,17 @@ def load_configs(source) -> "dict[str, str]":
         for f in sorted(source.glob("*")):
             if f.suffix.lower() in (".cfg", ".txt", ".conf") and f.is_file():
                 configs[f.stem] = f.read_text(encoding="utf-8", errors="replace")
+                groups[f.stem] = ""
     elif source.suffix.lower() == ".json":
         data = json.loads(source.read_text(encoding="utf-8"))
         for h in data.get("hosts", []):
             if h.get("config"):
-                configs[h.get("name") or h.get("host")] = h["config"]
+                name = h.get("name") or h.get("host")
+                configs[name] = h["config"]
+                groups[name] = h.get("group", "")
     else:
         raise ValueError(f"analyze source must be an audit.json or a directory: {source}")
-    return configs
+    return configs, groups
 
 
 def normalize_config(text: str) -> str:
