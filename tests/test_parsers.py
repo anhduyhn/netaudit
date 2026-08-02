@@ -97,9 +97,28 @@ class TestInterfaceConfigs(unittest.TestCase):
         self.assertEqual(attrs["mode"], "access")
         self.assertTrue(attrs["portfast"])
         self.assertTrue(attrs["bpduguard"])
+        self.assertEqual(attrs["access_vlan"], 10)
         uplink = parsers.interface_config_attrs(blocks["Gi1/0/24"])
         self.assertEqual(uplink["mode"], "trunk")
         self.assertTrue(uplink["portfast"])
+
+    def test_trunk_and_routed_attrs(self):
+        attrs = parsers.interface_config_attrs([
+            "switchport mode trunk",
+            "switchport trunk native vlan 999",
+            "switchport trunk allowed vlan 10,20,30",
+            "switchport nonegotiate",
+        ])
+        self.assertEqual(attrs["native_vlan"], 999)
+        self.assertTrue(attrs["allowed_vlans"])
+        self.assertTrue(attrs["nonegotiate"])
+        routed = parsers.interface_config_attrs(["no switchport", "ip address 10.0.0.1 255.255.255.0"])
+        self.assertTrue(routed["routed"])
+
+    def test_line_blocks(self):
+        blocks = parsers.parse_line_configs(fixtures.RUNNING_CONFIG)
+        self.assertIn("line vty 0 4", blocks)
+        self.assertIn("transport input ssh", blocks["line vty 0 4"])
 
 
 if __name__ == "__main__":

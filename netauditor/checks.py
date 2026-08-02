@@ -1,6 +1,7 @@
 """Health checks: turn raw command output into a structured per-host report with findings."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from . import parsers
@@ -77,8 +78,11 @@ def build_host_report(result: dict) -> dict:
         interfaces.append(iface)
         findings.extend(_check_interface(iface))
 
+    findings.extend(_check_vlan1_usage(interfaces))
     findings.extend(_check_global_stp(stp_summary))
     findings.extend(_check_stp_churn(stp_vlans))
+    if config:
+        findings.extend(_check_config_hygiene(config, parsers.parse_line_configs(config)))
     if not config:
         findings.append(Finding("NO_CONFIG", "warning",
                                 "Running config could not be collected; drift analysis will skip this host."))
@@ -129,6 +133,11 @@ def _merge_interface(entry, counters, iface_configs, cdp_switches, stp_summary) 
         "vlan": entry["vlan"],
         "duplex": entry["duplex"],
         "speed": entry["speed"],
+        "mode": attrs["mode"],
+        "native_vlan": attrs["native_vlan"],
+        "allowed_vlans": attrs["allowed_vlans"],
+        "nonegotiate": attrs["nonegotiate"],
+        "routed": attrs["routed"],
         "is_trunk": is_trunk,
         "is_uplink": is_uplink,
         "uplink_reason": ";".join(uplink_reasons),
@@ -167,7 +176,7 @@ def _check_interface(iface: dict) -> "list[Finding]":
             f"BPDU guard is enabled on uplink {name} - the first BPDU from the neighbor switch "
             "will err-disable this uplink and cut off everything behind it.", name))
 
-    if not iface["is_uplink"] and iface["status"] == "connected":
+    if not iface["is_uplink"] and iface["status"] == "connected" and not iface["routed"]:
         if not iface["portfast"]:
             findings.append(Finding(
                 "ACCESS_NO_PORTFAST", "warning",
@@ -191,11 +200,97 @@ def _check_interface(iface: dict) -> "list[Finding]":
             f"{name} has {iface['late_collisions']} late collisions - classic sign of a duplex mismatch.",
             name))
 
+    if iface["status"] == "connected" and not iface["routed"] and iface["mode"] is None:
+        findings.append(Finding(
+            "DTP_ENABLED", "warning",
+            f"{name} relies on DTP negotiation (no explicit switchport mode) - a connected "
+            "device can negotiate itself into a trunk and reach every VLAN. Set "
+            "'switchport mode access' (or trunk) plus 'switchport nonegotiate'.", name))
+
+    if iface["is_trunk"] and not iface["routed"]:
+        if (iface["native_vlan"] or 1) == 1:
+            findings.append(Finding(
+                "NATIVE_VLAN_1", "warning",
+                f"Trunk {name} uses native VLAN 1 - untagged traffic mixes with the default "
+                "VLAN and enables VLAN-hopping tricks. Dedicate an unused VLAN as native.", name))
+        if not iface["allowed_vlans"]:
+            findings.append(Finding(
+                "TRUNK_ALLOWS_ALL", "warning",
+                f"Trunk {name} carries every VLAN - prune it with 'switchport trunk allowed "
+                "vlan' so only the VLANs actually needed cross this link.", name))
+
     if iface["input_errors"] >= ERROR_COUNTER_THRESHOLD or iface["crc"] >= ERROR_COUNTER_THRESHOLD:
         findings.append(Finding(
             "INTERFACE_ERRORS", "warning",
             f"{name} shows {iface['input_errors']} input errors / {iface['crc']} CRC errors - "
             "check cabling, SFPs and duplex.", name))
+
+    return findings
+
+
+def _examples(names: "list[str]", limit: int = 6) -> str:
+    shown = ", ".join(names[:limit])
+    return shown + (", ..." if len(names) > limit else "")
+
+
+def _check_vlan1_usage(interfaces: "list[dict]") -> "list[Finding]":
+    """Aggregate VLAN 1 hygiene findings so 24 identical ports produce one line, not 24."""
+    findings = []
+    in_use = [i["interface"] for i in interfaces
+              if i["status"] == "connected" and not i["is_uplink"] and i["vlan"] == "1"]
+    if in_use:
+        findings.append(Finding(
+            "VLAN1_IN_USE", "info",
+            f"{len(in_use)} connected access port(s) still on default VLAN 1 "
+            f"({_examples(in_use)}) - move user traffic onto dedicated VLANs."))
+    unused = [i["interface"] for i in interfaces
+              if i["status"] == "notconnect" and i["vlan"] == "1"]
+    if unused:
+        findings.append(Finding(
+            "UNUSED_PORT_OPEN", "info",
+            f"{len(unused)} unused port(s) enabled and parked on VLAN 1 "
+            f"({_examples(unused)}) - anything plugged in joins the network; shut them "
+            "down or park them in a dead VLAN."))
+    return findings
+
+
+def _check_config_hygiene(config: str, line_blocks: "dict[str, list]") -> "list[Finding]":
+    """Management-plane hygiene checks common on out-of-the-box configs."""
+    findings = []
+    lines = [l.strip() for l in config.splitlines()]
+
+    never = sorted(h for h, ls in line_blocks.items()
+                   if "exec-timeout 0 0" in ls or "no exec-timeout" in ls)
+    if never:
+        findings.append(Finding(
+            "NO_EXEC_TIMEOUT", "warning",
+            f"Sessions on {', '.join(never)} never time out (exec-timeout 0 0) - an "
+            "unattended console or SSH session stays logged in forever."))
+
+    vty_blocks = {h: ls for h, ls in line_blocks.items() if h.startswith("line vty")}
+    if vty_blocks and not any(l.startswith("access-class")
+                              for ls in vty_blocks.values() for l in ls):
+        findings.append(Finding(
+            "VTY_NO_ACL", "warning",
+            "VTY lines accept management connections from any source address - add an "
+            "'access-class <acl> in' restricting SSH to the management network."))
+
+    if "ip ssh version 2" not in lines:
+        findings.append(Finding(
+            "SSH_V1", "warning",
+            "'ip ssh version 2' is not set - older IOS falls back to the broken SSHv1 "
+            "protocol. Pinning version 2 is harmless where v2 is already the default."))
+
+    if not any(l.startswith(("ntp server", "ntp peer")) for l in lines):
+        findings.append(Finding(
+            "NO_NTP", "warning",
+            "No NTP source configured - the clock drifts and log/STP timestamps become "
+            "useless for troubleshooting."))
+
+    if not any(l.startswith("logging host") or re.match(r"logging \d+\.", l) for l in lines):
+        findings.append(Finding(
+            "NO_LOGGING_HOST", "info",
+            "No syslog host configured - events vanish on reboot; send logs to a collector."))
 
     return findings
 

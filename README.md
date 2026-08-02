@@ -93,6 +93,11 @@ Checks performed per switch:
 | `ACCESS_NO_PORTFAST` / `ACCESS_NO_BPDUGUARD` | warning | Unprotected access/edge ports |
 | `HALF_DUPLEX` / `LATE_COLLISIONS` / `INTERFACE_ERRORS` | warning | Duplex mismatch signs and error counters |
 | `GLOBAL_BPDUFILTER` / `EDGE_UNPROTECTED` | warning | Risky global STP defaults |
+| `DTP_ENABLED` | warning | Port has no explicit switchport mode, so DTP can negotiate a trunk |
+| `NATIVE_VLAN_1` / `TRUNK_ALLOWS_ALL` | warning | Trunk native VLAN left at 1 / trunk not pruned |
+| `NO_EXEC_TIMEOUT` / `VTY_NO_ACL` / `SSH_V1` / `NO_NTP` | warning | Management-plane hygiene: sessions never expire, unrestricted VTY, SSH not pinned to v2, no time source |
+| `VLAN1_IN_USE` / `UNUSED_PORT_OPEN` | info | Access traffic on default VLAN 1 / live unused ports (aggregated per switch) |
+| `NO_LOGGING_HOST` | info | No syslog collector configured |
 | `LEGACY_STP` | info | Legacy PVST+ mode |
 
 Uplinks are identified from trunk mode/status **or** a CDP neighbor advertising

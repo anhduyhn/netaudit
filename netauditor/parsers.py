@@ -229,7 +229,9 @@ def parse_interface_configs(config: str) -> "dict[str, list]":
 def interface_config_attrs(lines: "list[str]") -> dict:
     """Derive STP/switchport attributes from one interface's config lines."""
     attrs = {"mode": None, "portfast": None, "portfast_trunk": False,
-             "bpduguard": None, "shutdown": False, "description": ""}
+             "bpduguard": None, "shutdown": False, "description": "",
+             "access_vlan": None, "native_vlan": None, "allowed_vlans": False,
+             "nonegotiate": False, "routed": False}
     for line in lines:
         if line.startswith("description "):
             attrs["description"] = line[len("description "):]
@@ -239,6 +241,22 @@ def interface_config_attrs(lines: "list[str]") -> dict:
             attrs["mode"] = "trunk"
         elif line == "switchport mode access":
             attrs["mode"] = "access"
+        elif line == "switchport nonegotiate":
+            attrs["nonegotiate"] = True
+        elif line == "no switchport":
+            attrs["routed"] = True
+        elif line.startswith("switchport access vlan "):
+            try:
+                attrs["access_vlan"] = int(line.rsplit(None, 1)[1])
+            except ValueError:
+                pass
+        elif line.startswith("switchport trunk native vlan "):
+            try:
+                attrs["native_vlan"] = int(line.rsplit(None, 1)[1])
+            except ValueError:
+                pass
+        elif line.startswith("switchport trunk allowed vlan"):
+            attrs["allowed_vlans"] = True
         elif "spanning-tree portfast" in line:
             if line.endswith("disable"):
                 attrs["portfast"] = False
@@ -249,3 +267,19 @@ def interface_config_attrs(lines: "list[str]") -> dict:
         elif "spanning-tree bpduguard" in line:
             attrs["bpduguard"] = line.endswith("enable")
     return attrs
+
+
+def parse_line_configs(config: str) -> "dict[str, list]":
+    """Split running-config into per-'line ...' blocks (console/VTY settings)."""
+    blocks = {}
+    current = None
+    for line in (config or "").splitlines():
+        if line.startswith("line "):
+            current = line.strip()
+            blocks[current] = []
+        elif current is not None:
+            if line.startswith(" "):
+                blocks[current].append(line.strip())
+            elif line.strip() != "!":
+                current = None
+    return blocks
