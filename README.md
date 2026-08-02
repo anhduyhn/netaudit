@@ -29,16 +29,29 @@ YAML (recommended - see [examples/inventory.yml](examples/inventory.yml)):
 defaults:
   username: audituser
   password: changeme
-hosts:
-  - host: 10.10.0.11
-    name: sw-core-1
-  - host: 10.10.0.13
-    username: localadmin   # inline creds take priority over defaults
-    password: different
+
+groups:                     # campus/site groups; audit one with -g sydenham
+  sydenham:
+    defaults:
+      username: syd-audit   # optional per-group defaults override the global ones
+    hosts:
+      - host: 10.1.0.11
+        name: sy-sw-core-1
+      - host: 10.1.0.12
+  delahey:
+    hosts:
+      - host: 10.2.0.11
+        username: localadmin   # inline creds take priority over everything
+        password: different
+
+hosts:                      # ungrouped hosts are always audited
+  - host: 10.9.0.14
+  - host: 10.9.0.15
+    group: kingspark        # a per-host group key also works
 ```
 
 Plain text also works: one `ip[,username[,password]]` per line, with optional
-INI-style `[campus]` sections.
+INI-style `[campus]` section headers assigning the hosts below them to a group.
 
 ### Campus / site groups
 
