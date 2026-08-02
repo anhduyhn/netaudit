@@ -78,7 +78,8 @@ netauditor audit -i inventory.yml -o out
 Connects to every switch in parallel and runs:
 `show version`, `show interfaces status`, `show interfaces`,
 `show spanning-tree summary`, `show spanning-tree detail`,
-`show cdp neighbors detail`, `show running-config`.
+`show cdp neighbors detail`, `show vtp status`, `show logging`,
+`show running-config`, `show startup-config`.
 
 Checks performed per switch:
 
@@ -88,7 +89,10 @@ Checks performed per switch:
 | `UPLINK_BPDUGUARD` | critical | BPDU guard on an uplink - first neighbor BPDU err-disables the uplink |
 | `ERRDISABLED` | critical | Port is err-disabled |
 | `STP_CHURN` | critical | High topology-change count *and* a recent change - active STP churn |
+| `MAC_FLAPPING` | critical | `%SW_MATM-4-MACFLAP` events in the log - loop or double-bridged device, aggregated per port pair |
 | `UNREACHABLE` | critical | Switch could not be audited |
+| `UNSAVED_CHANGES` | warning | Running config differs from startup-config (or none saved) - lost at reboot |
+| `VTP_SERVER` | warning | VTP server mode - a higher-revision switch can wipe the VLAN database |
 | `STP_CHURN_HISTORY` / `STP_RECENT_CHANGE` | warning | Accumulated or recent topology changes |
 | `ACCESS_NO_PORTFAST` / `ACCESS_NO_BPDUGUARD` | warning | Unprotected access/edge ports |
 | `HALF_DUPLEX` / `LATE_COLLISIONS` / `INTERFACE_ERRORS` | warning | Duplex mismatch signs and error counters |

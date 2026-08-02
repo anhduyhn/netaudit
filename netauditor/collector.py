@@ -11,7 +11,10 @@ COMMANDS = {
     "stp_summary": "show spanning-tree summary",
     "stp_detail": "show spanning-tree detail",
     "cdp_neighbors": "show cdp neighbors detail",
+    "vtp_status": "show vtp status",
+    "logging": "show logging",
     "running_config": "show running-config",
+    "startup_config": "show startup-config",
 }
 
 
@@ -40,7 +43,8 @@ def collect_host(host, timeout: int = 30) -> dict:
             if not host.name and prompt_name:
                 result["name"] = prompt_name
             for key, command in COMMANDS.items():
-                read_timeout = max(timeout, 120) if key == "running_config" else timeout
+                slow = key in ("running_config", "startup_config", "logging")
+                read_timeout = max(timeout, 120) if slow else timeout
                 try:
                     result["outputs"][key] = conn.send_command(command, read_timeout=read_timeout)
                 except Exception as exc:  # one failed command shouldn't kill the whole host

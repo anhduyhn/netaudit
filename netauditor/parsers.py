@@ -269,6 +269,33 @@ def interface_config_attrs(lines: "list[str]") -> dict:
     return attrs
 
 
+def parse_vtp_status(text: str) -> dict:
+    """Extract VTP operating mode and domain from 'show vtp status'."""
+    mode = re.search(r"VTP Operating Mode\s*:\s*(.+)", text or "")
+    domain = re.search(r"VTP Domain Name\s*:\s*(\S*)", text or "")
+    return {
+        "mode": mode.group(1).strip() if mode else None,
+        "domain": domain.group(1).strip() if domain else "",
+    }
+
+
+_MACFLAP_RE = re.compile(
+    r"Host (\S+) in vlan (\d+) is flapping between port (\S+) and port (\S+)")
+
+
+def parse_mac_flaps(text: str) -> "list[dict]":
+    """Extract %SW_MATM-4-MACFLAP_NOTIF events from 'show logging'."""
+    flaps = []
+    for m in _MACFLAP_RE.finditer(text or ""):
+        flaps.append({
+            "mac": m.group(1),
+            "vlan": int(m.group(2)),
+            "port_a": short_ifname(m.group(3)),
+            "port_b": short_ifname(m.group(4)),
+        })
+    return flaps
+
+
 def parse_line_configs(config: str) -> "dict[str, list]":
     """Split running-config into per-'line ...' blocks (console/VTY settings)."""
     blocks = {}

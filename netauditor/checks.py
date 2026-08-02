@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import parsers
+from .analyzer import normalize_config
 
 SEVERITIES = ("critical", "warning", "info")
 
@@ -81,6 +82,9 @@ def build_host_report(result: dict) -> dict:
     findings.extend(_check_vlan1_usage(interfaces))
     findings.extend(_check_global_stp(stp_summary))
     findings.extend(_check_stp_churn(stp_vlans))
+    findings.extend(_check_saved_config(config, out.get("startup_config")))
+    findings.extend(_check_mac_flaps(parsers.parse_mac_flaps(out.get("logging", ""))))
+    findings.extend(_check_vtp(parsers.parse_vtp_status(out.get("vtp_status", ""))))
     if config:
         findings.extend(_check_config_hygiene(config, parsers.parse_line_configs(config)))
     if not config:
@@ -293,6 +297,65 @@ def _check_config_hygiene(config: str, line_blocks: "dict[str, list]") -> "list[
             "No syslog host configured - events vanish on reboot; send logs to a collector."))
 
     return findings
+
+
+_STARTUP_HEADER_RE = re.compile(r"^Using \d+ out of \d+ bytes")
+
+
+def _check_saved_config(running: str, startup) -> "list[Finding]":
+    """Diff running vs startup config; unsaved changes vanish at the next reboot."""
+    if not running or startup is None:
+        return []
+    if not startup.strip():
+        return []  # collection failed (often a privilege issue) - stay quiet
+    if "not present" in startup.lower():
+        return [Finding(
+            "UNSAVED_CHANGES", "warning",
+            "No startup-config is saved at all - the entire configuration is lost on "
+            "reboot. Run 'copy running-config startup-config'.")]
+    run_lines = set(normalize_config(running).splitlines())
+    start_lines = {l for l in normalize_config(startup).splitlines()
+                   if not _STARTUP_HEADER_RE.match(l)}
+    diff = run_lines ^ start_lines
+    if diff:
+        return [Finding(
+            "UNSAVED_CHANGES", "warning",
+            f"Running config differs from startup-config ({len(diff)} line(s) differ) - "
+            "unsaved changes are lost at the next reboot. Run "
+            "'copy running-config startup-config'.")]
+    return []
+
+
+def _check_mac_flaps(flaps: "list[dict]") -> "list[Finding]":
+    """One finding per flapping port pair, with event/MAC/VLAN counts."""
+    groups = {}
+    for f in flaps:
+        key = tuple(sorted((f["port_a"], f["port_b"])))
+        g = groups.setdefault(key, {"count": 0, "macs": set(), "vlans": set()})
+        g["count"] += 1
+        g["macs"].add(f["mac"])
+        g["vlans"].add(f["vlan"])
+    findings = []
+    for (a, b), g in sorted(groups.items()):
+        vlans = ", ".join(str(v) for v in sorted(g["vlans"]))
+        findings.append(Finding(
+            "MAC_FLAPPING", "critical",
+            f"MAC flapping logged between {a} and {b}: {g['count']} event(s) for "
+            f"{len(g['macs'])} MAC(s) in vlan(s) {vlans} - classic sign of a loop or a "
+            "device bridged in twice; correlate with the STP churn findings.", a))
+    return findings
+
+
+def _check_vtp(vtp: dict) -> "list[Finding]":
+    mode = (vtp.get("mode") or "").lower()
+    if "server" in mode:
+        domain = vtp.get("domain") or "(none)"
+        return [Finding(
+            "VTP_SERVER", "warning",
+            f"VTP is in {vtp['mode']} mode (domain {domain}) - plugging in a switch with a "
+            "higher configuration revision can overwrite the VLAN database fleet-wide. Use "
+            "'vtp mode transparent' (or off) unless VTP is deliberately managed.")]
+    return []
 
 
 def _check_global_stp(summary: dict) -> "list[Finding]":
