@@ -266,9 +266,10 @@ def render_audit_html(audit: dict) -> str:
     for _, f in all_findings:
         counts[f["severity"]] = counts.get(f["severity"], 0) + 1
 
+    scope_note = f" · campus: {_e(audit['scope'])}" if audit.get("scope") else ""
     body = [f"<h1>Switch audit report</h1>"
             f"<div class='meta'>Generated {_e(audit.get('generated'))} by netauditor "
-            f"{_e(audit.get('tool_version'))}</div>"]
+            f"{_e(audit.get('tool_version'))}{scope_note}</div>"]
     body.append(_tiles([("Switches", len(hosts)),
                         ("Critical", counts["critical"]),
                         ("Warnings", counts["warning"]),

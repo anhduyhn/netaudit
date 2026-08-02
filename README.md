@@ -57,6 +57,12 @@ group information). The audit report shows a campus column and gains a campus
 dropdown in the filter toolbar, so a whole-fleet audit can still be read one
 campus at a time.
 
+When groups exist, per-campus HTML reports are written automatically next to
+the combined ones: `audit` produces `<group>.html` for each campus (plus
+`ungrouped.html` if some hosts have no group), and `analyze` produces
+`<group>.drift.html` with drift computed only within that campus (groups with a
+single switch are skipped). The JSON outputs stay combined.
+
 Credential precedence: inline per-host → inventory `defaults` →
 `NETAUDITOR_USERNAME` / `NETAUDITOR_PASSWORD` / `NETAUDITOR_SECRET` environment
 variables → interactive prompt. Prefer the env vars or the prompt over putting

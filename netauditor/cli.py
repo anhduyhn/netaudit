@@ -19,6 +19,23 @@ def _safe_filename(name: str) -> str:
     return re.sub(r"[^\w.\-]+", "_", name) or "switch"
 
 
+def _group_filename(group: str, suffix: str) -> str:
+    name = _safe_filename(group).lower()
+    if name in ("audit", "drift"):  # don't clobber the combined reports
+        name = f"group-{name}"
+    return f"{name}{suffix}"
+
+
+def _split_by_group(reports: "list[dict]") -> "list[tuple[str, list]]":
+    """Split host reports by group; empty when no host carries a group name."""
+    by = {}
+    for r in reports:
+        by.setdefault(r.get("group") or "", []).append(r)
+    if not any(g for g in by):
+        return []
+    return sorted((g or "ungrouped", members) for g, members in by.items())
+
+
 def _parse_formats(value: str) -> "list[str]":
     formats = [f.strip().lower() for f in value.split(",") if f.strip()]
     bad = [f for f in formats if f not in ("json", "html")]
@@ -81,6 +98,11 @@ def cmd_audit(args) -> int:
     if "html" in args.formats:
         (outdir / "audit.html").write_text(report.render_audit_html(audit), encoding="utf-8")
         print(f"Wrote {outdir / 'audit.html'}")
+        for gname, ghosts in _split_by_group(reports):
+            gpath = outdir / _group_filename(gname, ".html")
+            gpath.write_text(report.render_audit_html(dict(audit, hosts=ghosts, scope=gname)),
+                             encoding="utf-8")
+            print(f"Wrote {gpath}")
     cfg_dir = outdir / "configs"
     cfg_dir.mkdir(exist_ok=True)
     for h in reports:
@@ -146,6 +168,23 @@ def cmd_analyze(args) -> int:
     if "html" in args.formats:
         (outdir / "drift.html").write_text(report.render_drift_html(result), encoding="utf-8")
         print(f"Wrote {outdir / 'drift.html'}")
+        group_names = sorted({g for g in (groups.get(n, "") for n in configs) if g})
+        for gname in group_names:
+            gconfigs = {n: c for n, c in configs.items() if groups.get(n, "") == gname}
+            if len(gconfigs) < 2:
+                print(f"note: group '{gname}' has only {len(gconfigs)} config(s) - "
+                      "skipping its per-group drift report")
+                continue
+            gbaseline = args.baseline if args.baseline in gconfigs else None
+            gfindings, _ = analyzer.run_tests(gconfigs, args.tests)
+            gresult = dict(result,
+                           hosts=sorted(gconfigs),
+                           group_filter=gname,
+                           drift=analyzer.compute_drift(gconfigs, baseline=gbaseline),
+                           findings=gfindings)
+            gpath = outdir / _group_filename(gname, ".drift.html")
+            gpath.write_text(report.render_drift_html(gresult), encoding="utf-8")
+            print(f"Wrote {gpath}")
 
     criticals = sum(1 for f in findings if f["severity"] == "critical")
     print(f"Drift items: {drift['item_count']}; findings: {len(findings)} ({criticals} critical)")
