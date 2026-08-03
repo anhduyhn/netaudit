@@ -130,6 +130,7 @@ class DetailScreen(Screen):
     #dtabs { border: round $secondary; }
     #search { margin: 0 1; }
     #config { padding: 0 1; }
+    #fix { height: auto; max-height: 10; padding: 0 1; border-top: solid $secondary; }
     #dhint { dock: bottom; height: 1; padding: 0 1; background: $surface; }
     """
     BINDINGS = [
@@ -152,6 +153,7 @@ class DetailScreen(Screen):
             with TabPane("Findings", id="tab-findings"):
                 yield Input(placeholder="filter findings... ( / )", id="search")
                 yield DataTable(id="findings")
+                yield Static(id="fix")
             with TabPane("Interfaces", id="tab-interfaces"):
                 yield DataTable(id="interfaces")
             with TabPane("Config", id="tab-config"):
@@ -218,6 +220,29 @@ class DetailScreen(Screen):
     def action_reaudit(self) -> None:
         self.app.audit_single(self.row)
 
+    @on(DataTable.RowHighlighted, "#findings")
+    def _finding_changed(self, event: DataTable.RowHighlighted) -> None:
+        self._update_fix(event.cursor_row)
+
+    def _update_fix(self, index: int) -> None:
+        from .remediation import snippet_for
+        shown = filter_findings(self.row["findings"], self.severity, self.search_text)
+        panel = self.query_one("#fix", Static)
+        if not shown or index is None or index >= len(shown):
+            panel.update("")
+            return
+        f = shown[index]
+        snippet = snippet_for(f.get("code", ""), f.get("interface", ""))
+        if not snippet:
+            panel.update(Text("No mechanical fix for this finding - investigate.",
+                              style="dim"))
+            return
+        text = Text()
+        text.append(f"Suggested fix for {f.get('code', '')}", style="bold cyan")
+        text.append("  (suggestion only - review before applying)\n", style="dim")
+        text.append(snippet, style="green")
+        panel.update(text)
+
     @on(Input.Changed, "#search")
     def _search_changed(self, event: Input.Changed) -> None:
         self.search_text = event.value
@@ -237,6 +262,7 @@ class DetailScreen(Screen):
                           Text(str(f.get("message", ""))))
         self.query_one("#dtabs", TabbedContent).get_tab("tab-findings").label = \
             f"Findings [{self.severity}] {len(shown)}/{len(self.row['findings'])}"
+        self._update_fix(0)
 
 
 class DriftScreen(Screen):
@@ -277,6 +303,55 @@ class DriftScreen(Screen):
             table.add_row(Text(item.get("header", "")),
                           Text(", ".join(item.get("missing_on", []))),
                           str(len(item.get("variants", []))))
+        table.focus()
+
+
+class ChangesScreen(Screen):
+    """What changed since the previous audit snapshot."""
+
+    CSS = """
+    #chheader { height: 2; padding: 0 1; border: round $secondary; }
+    #changes { border: round $secondary; }
+    #chhint { dock: bottom; height: 1; padding: 0 1; background: $surface; }
+    """
+    BINDINGS = [Binding("escape", "app.pop_screen", "back", show=False)]
+
+    def __init__(self, delta: dict, label: str):
+        super().__init__()
+        self.delta = delta or {}
+        self.label = label
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="chheader")
+        yield DataTable(id="changes")
+        yield Static(_hints([("esc", "back"), ("q", "quit")]), id="chhint")
+
+    def on_mount(self) -> None:
+        totals = self.delta.get("totals", {})
+        header = Text("Changes since ", style="bold cyan")
+        header.append(self.label, style="dim")
+        header.append(f"\n✓ {totals.get('fixed', 0)} fixed", style="green")
+        header.append(f"   + {totals.get('added', 0)} new", style="bold red")
+        header.append(f"   = {totals.get('still_open', 0)} unchanged", style="dim")
+        if self.delta.get("new_switches"):
+            header.append(f"   new switches: {len(self.delta['new_switches'])}",
+                          style="cyan")
+        self.query_one("#chheader", Static).update(header)
+        table = self.query_one("#changes", DataTable)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+        table.add_columns("", "Switch", "Sev", "Code", "Port", "Message")
+        for sw in self.delta.get("switches", []):
+            for f in sw["fixed"]:
+                table.add_row(Text("✓ fixed", style="green"), sw["name"],
+                              _sev(f.get("severity", "")), f.get("code", ""),
+                              f.get("interface", ""),
+                              Text(str(f.get("message", ""))[:120]))
+            for f in sw["added"]:
+                table.add_row(Text("+ new", style="bold red"), sw["name"],
+                              _sev(f.get("severity", "")), f.get("code", ""),
+                              f.get("interface", ""),
+                              Text(str(f.get("message", ""))[:120]))
         table.focus()
 
 
@@ -328,6 +403,7 @@ class AuditUI(App):
         Binding("l", "show_log", "log", show=False),
         Binding("r", "reload", "reload", show=False),
         Binding("p", "prune", "prune", show=False),
+        Binding("c", "changes", "changes", show=False),
         Binding("w", "toggle_watch", "watch", show=False),
         Binding("slash", "find", "find", show=False),
         Binding("escape", "clear_find", show=False),
@@ -368,9 +444,10 @@ class AuditUI(App):
         yield Input(placeholder="find switch... (esc clears)", id="hostsearch")
         yield Static(id="detailstrip")
         yield Static(_hints([("↑↓", "nav"), ("←→", "campus"), ("⏎", "detail"),
-                             ("a", "audit scope"), ("d", "drift"), ("s", "ssh"),
-                             ("w", "watch"), ("l", "log"), ("/", "find"),
-                             ("p", "prune"), ("r", "reload"), ("q", "quit")]),
+                             ("a", "audit scope"), ("d", "drift"), ("c", "changes"),
+                             ("s", "ssh"), ("w", "watch"), ("l", "log"),
+                             ("/", "find"), ("p", "prune"), ("r", "reload"),
+                             ("q", "quit")]),
                      id="hintbar")
 
     def on_mount(self) -> None:
@@ -701,6 +778,22 @@ class AuditUI(App):
 
     def action_show_log(self) -> None:
         self.push_screen(LogScreen())
+
+    def action_changes(self) -> None:
+        from .history import (_stamp_from, diff_audits, load_snapshot,
+                              previous_snapshot)
+        from .ui_data import load_audit
+        current = load_audit(self.outdir)
+        if current is None:
+            self.notify("No audit yet - press a to run one.", severity="warning")
+            return
+        prev_path = previous_snapshot(
+            self.outdir, before_stamp=_stamp_from(current.get("generated", "")))
+        if prev_path is None:
+            self.notify("No earlier snapshot yet - this audit is the baseline.")
+            return
+        delta = diff_audits(load_snapshot(prev_path), current)
+        self.push_screen(ChangesScreen(delta, prev_path.name))
 
     def action_reload(self) -> None:
         from .ui_data import load_audit

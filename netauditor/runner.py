@@ -108,7 +108,7 @@ def _write_audit_outputs(audit, outdir: Path, formats) -> "list[str]":
 
 
 def run_audit(hosts, outdir, formats=("json", "html"), workers=8, timeout=30,
-              progress=None, fresh=False) -> "tuple[dict, dict, list]":
+              progress=None, fresh=False, snapshot=True, backup=True) -> "tuple[dict, dict, list]":
     """Collect, check, and write all audit outputs.
 
     By default the results MERGE into an existing audit.json, so a scoped run
@@ -145,6 +145,16 @@ def run_audit(hosts, outdir, formats=("json", "html"), workers=8, timeout=30,
                                                                       encoding="utf-8")
     messages.append(f"Wrote {sum(1 for h in reports if h['config'])} config export(s) "
                     f"to {cfg_dir}")
+
+    if snapshot:
+        from .history import save_snapshot
+        path = save_snapshot(audit, outdir)
+        if path:
+            messages.append(f"Archived snapshot {path}")
+    if backup:
+        from .history import backup_configs
+        messages.append(backup_configs(
+            outdir, f"audit {audit['generated']}: {len(reports)} switch(es)"))
     return audit, checks.count_findings(reports), messages
 
 

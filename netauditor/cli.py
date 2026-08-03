@@ -85,7 +85,9 @@ def cmd_audit(args) -> int:
 
     _, counts, messages = run_audit(hosts, args.output, formats=args.formats,
                                     workers=args.workers, timeout=args.timeout,
-                                    progress=progress, fresh=args.fresh)
+                                    progress=progress, fresh=args.fresh,
+                                    snapshot=not args.no_snapshot,
+                                    backup=not args.no_backup)
     for line in messages:
         print(line)
     print(f"Findings: {counts['critical']} critical, {counts['warning']} warning, {counts['info']} info")
@@ -227,6 +229,69 @@ def cmd_status(args) -> int:
     return 1 if down else 0
 
 
+def cmd_diff(args) -> int:
+    from .history import (config_diff, diff_audits, list_snapshots, load_snapshot,
+                          previous_snapshot)
+    from .ui_data import load_audit
+
+    outdir = Path(args.output)
+    current = load_audit(outdir)
+    if current is None:
+        print(f"error: no audit.json in {outdir} - run an audit first", file=sys.stderr)
+        return 2
+    snaps = list_snapshots(outdir)
+    if args.since:
+        matches = [p for p in snaps if args.since in p.name]
+        if not matches:
+            print(f"error: no snapshot matching '{args.since}'. Available: "
+                  f"{', '.join(p.name for p in snaps) or 'none'}", file=sys.stderr)
+            return 2
+        prev_path = matches[-1]
+    else:
+        # the newest snapshot is usually the current audit itself; step back one
+        stamp = ""
+        if snaps:
+            from .history import _stamp_from
+            stamp = _stamp_from(current.get("generated", ""))
+        prev_path = previous_snapshot(outdir, before_stamp=stamp)
+    if prev_path is None:
+        print("No earlier snapshot to compare against yet - this audit is the baseline.")
+        return 0
+    previous = load_snapshot(prev_path)
+    print(f"Comparing {prev_path.name} -> current audit "
+          f"({current.get('generated', '')})\n")
+
+    if args.config:
+        lines = config_diff(previous, current, args.config)
+        if not lines:
+            print(f"No config differences for {args.config}.")
+            return 0
+        for line in lines:
+            print(line)
+        return 0
+
+    delta = diff_audits(previous, current)
+    totals = delta["totals"]
+    for sw in delta["switches"]:
+        print(f"{sw['name']} ({sw['host']})")
+        for f in sw["fixed"]:
+            port = f" {f['interface']}" if f.get("interface") else ""
+            print(f"  FIXED   {f['code']}{port}")
+        for f in sw["added"]:
+            port = f" {f['interface']}" if f.get("interface") else ""
+            print(f"  NEW     [{f['severity']}] {f['code']}{port}")
+        print(f"  ({sw['still_open']} unchanged)")
+    if delta["new_switches"]:
+        print(f"\nNew switches: {', '.join(delta['new_switches'])}")
+    if delta["gone_switches"]:
+        print(f"Gone from the audit: {', '.join(delta['gone_switches'])}")
+    if not delta["switches"]:
+        print("No finding changes between these audits.")
+    print(f"\nTotals: {totals['fixed']} fixed, {totals['added']} new, "
+          f"{totals['still_open']} still open")
+    return 1 if totals["added"] else 0
+
+
 def cmd_connect(args) -> int:
     inventory, err = _resolve_inventory(args.inventory)
     if err:
@@ -335,7 +400,22 @@ def main(argv=None) -> int:
     p_audit.add_argument("--fresh", action="store_true",
                          help="discard previous audit results instead of merging "
                               "scoped runs into them")
+    p_audit.add_argument("--no-snapshot", action="store_true",
+                         help="do not archive this audit under out/history/")
+    p_audit.add_argument("--no-backup", action="store_true",
+                         help="do not git-commit the exported configs")
     p_audit.set_defaults(func=cmd_audit)
+
+    p_diff = sub.add_parser("diff", help="compare the current audit with an earlier "
+                                         "snapshot: fixed / new / unchanged findings")
+    p_diff.add_argument("-o", "--output", default="out",
+                        help="audit output dir (default: out)")
+    p_diff.add_argument("--since", default="",
+                        help="snapshot to compare against (substring of its filename, "
+                             "e.g. 20260803); default: the previous snapshot")
+    p_diff.add_argument("--config", default="", metavar="SWITCH",
+                        help="show that switch's running-config diff instead of findings")
+    p_diff.set_defaults(func=cmd_diff)
 
     p_prune = sub.add_parser("prune", help="remove audit entries for switches that are "
                                            "no longer in the inventory")

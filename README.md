@@ -170,6 +170,11 @@ still treated as an uplink.
 
 Output (`out/`):
 
+Findings come with **suggested IOS fixes**: each finding group in `audit.html`
+has a collapsible "Suggested fix" block with a copy-paste snippet scoped to the
+affected port, and the UI's detail screen shows the snippet for the selected
+finding. They are suggestions only - netauditor never writes configuration.
+
 - `audit.json` - full structured report (facts, interfaces, findings, configs)
 - `audit.html` - self-contained report: fleet overview, findings grouped by
   code (critical groups expanded), per-switch interface tables, collapsible
@@ -180,7 +185,25 @@ Output (`out/`):
 Exit code is `1` if any critical finding exists (usable in CI/cron), `2` on
 usage errors, otherwise `0`.
 
-## 2. Analyze (config drift + extra tests)
+Every audit also archives a timestamped snapshot under `out/history/` (the
+newest 30 are kept) and git-commits `out/configs/` - a free per-switch config
+history you can `git log` forever. Disable either with `--no-snapshot` /
+`--no-backup`.
+
+## 2. Diff (what changed since last time)
+
+```
+netauditor diff                             # vs the previous snapshot
+netauditor diff --since 20260803            # vs a specific snapshot
+netauditor diff --config DE-SW-LIB-02       # that switch's running-config diff
+```
+
+Answers "did the fixes take?": per switch it lists findings that are **FIXED**
+(gone since the earlier audit), **NEW**, and how many are unchanged, plus
+switches added to or missing from the fleet. Exit code 1 if anything new
+appeared. The same view is `c` in the UI.
+
+## 3. Analyze (config drift + extra tests)
 
 ```
 netauditor analyze out/audit.json -o out --tests all
@@ -226,7 +249,7 @@ Extra test suites via `--tests` (comma-separated, or `all`):
 
 Outputs `drift.json` and `drift.html` in the same style as the audit report.
 
-## 3. Connect (live SSH session)
+## 4. Connect (live SSH session)
 
 ```
 netauditor connect sw-lib-02 -i inventory.yml
@@ -240,7 +263,7 @@ target at all) you get a numbered list to pick from. Type `exit` on the switch
 to end the session. Ctrl+C is passed through to the switch, and arrow keys /
 history work as normal. Host keys are auto-accepted, same policy as the audit.
 
-## 4. Status (quick reachability check)
+## 5. Status (quick reachability check)
 
 ```
 netauditor status -i inventory.yml [-g sydenham]
@@ -253,7 +276,7 @@ anything is down, so it doubles as a cron-able dead-switch alarm. Reachability
 and audit state are deliberately separate: "up" only means the management port
 answers.
 
-## 5. Command center (terminal UI)
+## 6. Command center (terminal UI)
 
 ```
 netauditor
@@ -279,6 +302,7 @@ Keys:
 | `Enter` | Drill into the selected switch (or aggregate row) - findings, interfaces, config. `a` inside re-audits just that switch. |
 | `a` | Audit the current scope: the whole inventory on the All tab, one campus on a campus tab. Results merge into the existing audit. Prompts for credentials in-app if the inventory has none. |
 | `d` | Run the drift check + all test suites; results open in a drift screen. |
+| `c` | Changes since the previous audit snapshot: what got fixed, what is new. |
 | `p` | Prune stale entries (switches no longer in the inventory, shown dim with `?`) after a confirmation listing them. |
 | `w` | Toggle watch mode (on by default with an inventory): TCP-probes every switch on an interval (`--interval`, default 15s). `St` shows live up/down, `ms`/`Seen` columns update, and the status bar shows `live ↑N ↓N | next scan Ns`. Audit flags stay in their own column. |
 | `s` | Live SSH session on the selected switch; ending it returns to the dashboard. |

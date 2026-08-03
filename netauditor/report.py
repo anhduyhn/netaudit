@@ -48,6 +48,9 @@ summary { cursor: pointer; font-weight: 600; }
 .banner-unsaved { background: #ffb020; color: #3a2500; font-weight: 700;
                   padding: 10px 14px; border-radius: 8px; margin: 10px 0; }
 .unsaved-mark { color: #b45f06; font-weight: 700; }
+.fixblock { margin: 4px 0 8px; }
+.fixblock summary { font-size: 13px; color: #1c4f9c; }
+.fixblock pre { margin: 6px 0; }
 .findgroup { background: #fff; border: 1px solid #e2e5ea; border-radius: 8px;
              padding: 8px 14px; margin: 8px 0; }
 .findgroup summary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -237,6 +240,27 @@ def _toolbar(placeholder: str) -> str:
             f"<span id='matchcount'></span></div>")
 
 
+def _fix_block(code: str, findings: "list[dict]") -> str:
+    """Remediation snippet for a finding group, if there is a sane one."""
+    from .remediation import snippet_for
+
+    interfaces = sorted({f.get("interface", "") for f in findings if f.get("interface")})
+    snippet = snippet_for(code, interfaces[0] if len(interfaces) == 1 else "")
+    if not snippet:
+        return ""
+    if len(interfaces) > 1:
+        snippet = snippet_for(code, "<interface>")
+        note = (f"<div class='small'>Apply per affected port: "
+                f"{_e(', '.join(interfaces[:12]))}"
+                f"{', ...' if len(interfaces) > 12 else ''}</div>")
+    else:
+        note = ""
+    return ("<details class='fixblock'><summary>Suggested fix (IOS)</summary>"
+            f"{note}<pre>{_e(snippet)}</pre>"
+            "<div class='small'>Suggestion only - review before applying, and save "
+            "the config afterwards.</div></details>")
+
+
 def _finding_groups(findings: "list[dict]", cols: "list[str]", row_fn) -> str:
     """Render findings as per-code collapsible groups, critical groups open."""
     groups = {}
@@ -255,7 +279,9 @@ def _finding_groups(findings: "list[dict]", cols: "list[str]", row_fn) -> str:
         out.append("<table class='searchable' data-cat='findings'><tr>"
                    + "".join(f"<th>{_e(c)}</th>" for c in cols) + "</tr>")
         out.extend(row_fn(f) for f in items)
-        out.append("</table></details>")
+        out.append("</table>")
+        out.append(_fix_block(code, items))
+        out.append("</details>")
     return "".join(out)
 
 
