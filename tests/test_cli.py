@@ -66,5 +66,33 @@ class TestAnalyzePerGroupExport(unittest.TestCase):
         self.assertNotIn("sy-sw-1", drift)
 
 
+class TestPruneCommand(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.out = self.tmp / "out"
+        self.out.mkdir()
+        (self.out / "audit.json").write_text(json.dumps({"hosts": [
+            {"name": "sw1", "host": "10.1.0.11", "config": CONFIG_A,
+             "findings": [], "interfaces": [], "facts": {}},
+            {"name": "ghost-sw", "host": "10.9.9.9", "config": CONFIG_A,
+             "findings": [], "interfaces": [], "facts": {}},
+        ]}), encoding="utf-8")
+        self.inv = self.tmp / "inv.yml"
+        self.inv.write_text("hosts:\n  - host: 10.1.0.11\n    name: sw1\n",
+                            encoding="utf-8")
+
+    def test_dry_run_lists_but_keeps(self):
+        rc = cli.main(["prune", "-i", str(self.inv), "-o", str(self.out)])
+        self.assertEqual(rc, 0)
+        data = json.loads((self.out / "audit.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(data["hosts"]), 2)
+
+    def test_yes_removes(self):
+        rc = cli.main(["prune", "-i", str(self.inv), "-o", str(self.out), "--yes"])
+        self.assertEqual(rc, 0)
+        data = json.loads((self.out / "audit.json").read_text(encoding="utf-8"))
+        self.assertEqual([h["name"] for h in data["hosts"]], ["sw1"])
+
+
 if __name__ == "__main__":
     unittest.main()

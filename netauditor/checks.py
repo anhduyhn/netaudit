@@ -1,6 +1,7 @@
 """Health checks: turn raw command output into a structured per-host report with findings."""
 from __future__ import annotations
 
+import datetime
 import re
 from dataclasses import dataclass, field
 
@@ -38,6 +39,9 @@ def build_host_report(result: dict) -> dict:
         "host": result["host"],
         "name": name,
         "group": result.get("group", ""),
+        # per-host capture time: with merged partial audits, entries age
+        # independently and this is what tells them apart
+        "audited_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         "error": result.get("error"),
         "command_errors": result.get("command_errors", {}),
         "facts": {},

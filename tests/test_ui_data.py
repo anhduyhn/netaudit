@@ -61,6 +61,27 @@ class TestBuildRows(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["host"], "10.9.9.9")
 
+    def test_ghost_flag_only_with_inventory(self):
+        inv = [Host(host="10.0.0.1", name="sw1")]
+        rows = build_rows(inv, audit_fixture())
+        by_name = {r["name"]: r for r in rows}
+        self.assertFalse(by_name["sw1"]["ghost"])       # matched
+        self.assertTrue(by_name["sw2"]["ghost"])        # audit-only = ghost
+        # without an inventory nothing can be classified as a ghost
+        rows = build_rows([], audit_fixture())
+        self.assertFalse(any(r["ghost"] for r in rows))
+
+    def test_hosts_for_scope(self):
+        from netauditor.ui_data import hosts_for_scope
+        inv = [Host(host="10.1.0.1", group="sydenham"),
+               Host(host="10.2.0.1", group="delahey"),
+               Host(host="10.9.0.1")]
+        self.assertEqual(len(hosts_for_scope(inv, "All")), 3)
+        self.assertEqual([h.host for h in hosts_for_scope(inv, "sydenham")],
+                         ["10.1.0.1"])
+        self.assertEqual([h.host for h in hosts_for_scope(inv, "ungrouped")],
+                         ["10.9.0.1"])
+
     def test_inventory_matched_by_name(self):
         inv = [Host(host="192.168.99.1", name="sw2", username="u", password="p")]
         rows = build_rows(inv, audit_fixture())

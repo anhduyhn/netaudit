@@ -6,6 +6,7 @@ two entry points cannot drift apart in behaviour.
 from __future__ import annotations
 
 import datetime
+import json
 import re
 from pathlib import Path
 
@@ -37,21 +38,60 @@ def _split_by_group(reports: "list[dict]") -> "list[tuple[str, list]]":
     return sorted((g or "ungrouped", members) for g, members in by.items())
 
 
-def run_audit(hosts, outdir, formats=("json", "html"), workers=8, timeout=30,
-              progress=None) -> "tuple[dict, dict, list]":
-    """Collect, check, and write all audit outputs.
+def _entry_keys(entry) -> "list[tuple]":
+    keys = []
+    host = entry.get("host") if isinstance(entry, dict) else entry.host
+    name = entry.get("name") if isinstance(entry, dict) else entry.display_name()
+    if host:
+        keys.append(("ip", host))
+    if name:
+        keys.append(("name", str(name).lower()))
+    return keys
 
-    Returns (audit, severity_counts, messages) where messages are the
-    human-readable "Wrote ..." lines.
+
+def merge_audit_hosts(existing, fresh) -> "list[dict]":
+    """Merge freshly audited host entries into an existing list.
+
+    Fresh entries replace existing ones (matched by IP first, then by name);
+    unmatched existing entries are kept in place; brand-new entries append.
+    Two old entries matching the same fresh one collapse into it (dedupe after
+    a rename or re-IP).
     """
-    from .collector import collect_all  # lazy: needs netmiko
+    fresh_by_key = {}
+    for entry in fresh:
+        for key in _entry_keys(entry):
+            fresh_by_key[key] = entry
+    merged, used = [], set()
+    for old in existing:
+        replacement = None
+        for key in _entry_keys(old):
+            if key in fresh_by_key:
+                replacement = fresh_by_key[key]
+                break
+        if replacement is None:
+            merged.append(old)
+        elif id(replacement) not in used:
+            merged.append(replacement)
+            used.add(id(replacement))
+    for entry in fresh:
+        if id(entry) not in used:
+            merged.append(entry)
+    return merged
 
-    results = collect_all(hosts, workers=workers, timeout=timeout, progress=progress)
-    reports = [checks.build_host_report(r) for r in results]
-    audit = {"generated": _now(), "tool_version": __version__, "hosts": reports}
 
-    outdir = Path(outdir)
+def _load_existing_hosts(outdir: Path) -> "list[dict]":
+    path = outdir / "audit.json"
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("hosts", [])
+    except (OSError, ValueError):
+        return []
+
+
+def _write_audit_outputs(audit, outdir: Path, formats) -> "list[str]":
     outdir.mkdir(parents=True, exist_ok=True)
+    reports = audit["hosts"]
     messages = []
     if "json" in formats:
         report.write_json(audit, outdir / "audit.json")
@@ -64,8 +104,41 @@ def run_audit(hosts, outdir, formats=("json", "html"), workers=8, timeout=30,
             gpath.write_text(report.render_audit_html(dict(audit, hosts=ghosts, scope=gname)),
                              encoding="utf-8")
             messages.append(f"Wrote {gpath}")
+    return messages
+
+
+def run_audit(hosts, outdir, formats=("json", "html"), workers=8, timeout=30,
+              progress=None, fresh=False) -> "tuple[dict, dict, list]":
+    """Collect, check, and write all audit outputs.
+
+    By default the results MERGE into an existing audit.json, so a scoped run
+    (one campus, one switch) updates just those entries and keeps the rest of
+    the fleet's data. `fresh=True` discards previous results entirely.
+
+    Returns (audit, severity_counts, messages); severity_counts cover only the
+    hosts audited in this run.
+    """
+    from .collector import collect_all  # lazy: needs netmiko
+
+    results = collect_all(hosts, workers=workers, timeout=timeout, progress=progress)
+    reports = [checks.build_host_report(r) for r in results]
+    outdir = Path(outdir)
+
+    messages = []
+    all_reports = reports
+    if not fresh:
+        existing = _load_existing_hosts(outdir)
+        if existing:
+            all_reports = merge_audit_hosts(existing, reports)
+            kept = len(all_reports) - len(reports)
+            if kept:
+                messages.append(f"Merged: {len(reports)} switch(es) re-audited, "
+                                f"{kept} kept from the previous audit")
+    audit = {"generated": _now(), "tool_version": __version__, "hosts": all_reports}
+    messages.extend(_write_audit_outputs(audit, outdir, formats))
+
     cfg_dir = outdir / "configs"
-    cfg_dir.mkdir(exist_ok=True)
+    cfg_dir.mkdir(parents=True, exist_ok=True)
     for h in reports:
         if h["config"]:
             (cfg_dir / f"{_safe_filename(h['name'])}.cfg").write_text(h["config"],
@@ -73,6 +146,38 @@ def run_audit(hosts, outdir, formats=("json", "html"), workers=8, timeout=30,
     messages.append(f"Wrote {sum(1 for h in reports if h['config'])} config export(s) "
                     f"to {cfg_dir}")
     return audit, checks.count_findings(reports), messages
+
+
+def find_ghosts(inv_hosts, audit_hosts) -> "list[dict]":
+    """Audit entries with no matching inventory host (removed/renamed switches)."""
+    inv_keys = set()
+    for h in inv_hosts:
+        inv_keys.update(_entry_keys(h))
+    return [e for e in audit_hosts if not any(k in inv_keys for k in _entry_keys(e))]
+
+
+def prune_audit(inv_hosts, outdir, formats=("json", "html"),
+                apply=False) -> "tuple[list, list]":
+    """Identify (and with apply=True remove) audit entries not in the inventory.
+
+    Returns (ghost_names, messages). Raises FileNotFoundError when there is no
+    audit.json to prune.
+    """
+    outdir = Path(outdir)
+    path = outdir / "audit.json"
+    if not path.exists():
+        raise FileNotFoundError(f"no audit.json in {outdir}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    audit_hosts = data.get("hosts", [])
+    ghosts = find_ghosts(inv_hosts, audit_hosts)
+    names = [g.get("name") or g.get("host") for g in ghosts]
+    if not apply or not ghosts:
+        return names, []
+    ghost_ids = {id(g) for g in ghosts}
+    keep = [e for e in audit_hosts if id(e) not in ghost_ids]
+    audit = dict(data, generated=_now(), hosts=keep)
+    messages = _write_audit_outputs(audit, outdir, formats)
+    return names, messages
 
 
 def run_analyze(configs, groups, outdir, tests=(), baseline=None,

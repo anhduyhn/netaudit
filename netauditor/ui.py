@@ -19,7 +19,7 @@ from textual.widgets import (Button, DataTable, Header, Input, Label, RichLog,
                              Static, Tab, TabbedContent, TabPane, Tabs)
 
 from .ui_data import (ALL_ROW_NAME, SEVERITY_CYCLE, aggregate_row, build_rows,
-                      campuses, filter_findings, load_drift)
+                      campuses, filter_findings, hosts_for_scope, load_drift)
 
 _SEV_STYLE = {"critical": "bold red", "warning": "yellow", "info": "cyan"}
 _UNGROUPED_LABEL = "ungrouped"
@@ -88,6 +88,39 @@ class CredentialsScreen(ModalScreen):
         self.dismiss(None)
 
 
+class ConfirmScreen(ModalScreen):
+    """Yes/no confirmation; dismisses with True/False."""
+
+    CSS = """
+    ConfirmScreen { align: center middle; }
+    #confirm { width: 70; height: auto; border: round $warning; padding: 1 2; background: $surface; }
+    #confirm Button { margin: 1 2 0 0; }
+    """
+    BINDINGS = [Binding("escape", "cancel", show=False)]
+
+    def __init__(self, message: str):
+        super().__init__()
+        self.message = message
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="confirm"):
+            yield Label(self.message)
+            with Horizontal():
+                yield Button("Yes", variant="warning", id="confirm-yes")
+                yield Button("Cancel", id="confirm-no")
+
+    @on(Button.Pressed, "#confirm-yes")
+    def _yes(self, _event) -> None:
+        self.dismiss(True)
+
+    @on(Button.Pressed, "#confirm-no")
+    def _no(self, _event) -> None:
+        self.dismiss(False)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class DetailScreen(Screen):
     """Full-screen drill-in for one switch (or an aggregate scope)."""
 
@@ -103,6 +136,7 @@ class DetailScreen(Screen):
         Binding("f", "cycle_severity", "severity", show=False),
         Binding("slash", "focus_search", "search", show=False),
         Binding("s", "ssh", "ssh", show=False),
+        Binding("a", "reaudit", "re-audit", show=False),
     ]
 
     def __init__(self, row: dict):
@@ -123,7 +157,8 @@ class DetailScreen(Screen):
                 with VerticalScroll():
                     yield Static("", id="config")
         yield Static(_hints([("esc", "back"), ("tab", "next pane"), ("f", "severity"),
-                             ("/", "find"), ("s", "ssh"), ("q", "quit")]), id="dhint")
+                             ("/", "find"), ("s", "ssh"), ("a", "re-audit"),
+                             ("q", "quit")]), id="dhint")
 
     def on_mount(self) -> None:
         row = self.row
@@ -176,6 +211,9 @@ class DetailScreen(Screen):
 
     def action_ssh(self) -> None:
         self.app.open_ssh(self.row)
+
+    def action_reaudit(self) -> None:
+        self.app.audit_single(self.row)
 
     @on(Input.Changed, "#search")
     def _search_changed(self, event: Input.Changed) -> None:
@@ -283,6 +321,7 @@ class AuditUI(App):
         Binding("s", "ssh", "ssh", show=False),
         Binding("l", "show_log", "log", show=False),
         Binding("r", "reload", "reload", show=False),
+        Binding("p", "prune", "prune", show=False),
         Binding("slash", "find", "find", show=False),
         Binding("escape", "clear_find", show=False),
     ]
@@ -314,9 +353,9 @@ class AuditUI(App):
         yield Input(placeholder="find switch... (esc clears)", id="hostsearch")
         yield Static(id="detailstrip")
         yield Static(_hints([("↑↓", "nav"), ("←→", "campus"), ("⏎", "detail"),
-                             ("a", "audit"), ("d", "drift"), ("s", "ssh"),
-                             ("l", "log"), ("/", "find"), ("r", "reload"),
-                             ("q", "quit")]), id="hintbar")
+                             ("a", "audit scope"), ("d", "drift"), ("s", "ssh"),
+                             ("l", "log"), ("/", "find"), ("p", "prune"),
+                             ("r", "reload"), ("q", "quit")]), id="hintbar")
 
     def on_mount(self) -> None:
         self._campus_names = ["All"] + [_UNGROUPED_LABEL if c == "" else c
@@ -328,7 +367,7 @@ class AuditUI(App):
         table.zebra_stripes = True
         table.border_title = "Switches"
         table.add_columns("St", "Switch", "IP", "Campus", "Model", "IOS",
-                          "Uptime", "C", "W")
+                          "Uptime", "C", "W", "Audited")
         self.last_drift = load_drift(self.outdir)
         self._populate_hosts()
         self.set_interval(1.0, self._update_status)
@@ -358,7 +397,7 @@ class AuditUI(App):
         table.add_row(Text("≡", style="bold"), Text(agg_name, style="bold"),
                       "", "", "", "", "",
                       _count(agg["critical"], "bold red"),
-                      _count(agg["warning"], "yellow"), key="agg")
+                      _count(agg["warning"], "yellow"), "", key="agg")
         if self.campus == "All":
             for campus in campuses(scope):
                 label = _UNGROUPED_LABEL if campus == "" else campus
@@ -367,7 +406,7 @@ class AuditUI(App):
                 self._rowmap[key] = aggregate_row(members, f"= {label} =")
                 table.add_row(Text("─", style="blue"),
                               Text(f"── {label} ──", style="bold blue"),
-                              "", "", "", "", "", "", "", key=key)
+                              "", "", "", "", "", "", "", "", key=key)
                 for r in members:
                     self._add_host_row(table, r)
         else:
@@ -379,7 +418,10 @@ class AuditUI(App):
     def _add_host_row(self, table, r) -> None:
         key = f"h:{id(r)}"
         self._rowmap[key] = r
-        if r.get("error"):
+        if r.get("ghost"):
+            st = Text("?", style="dim")
+            style = "dim"
+        elif r.get("error"):
             st = Text("✗", style="bold red")
             style = "red"
         elif r["critical"]:
@@ -392,6 +434,7 @@ class AuditUI(App):
             st = Text("●", style="green")
             style = ""
         facts = r.get("facts") or {}
+        audited = (r.get("audited_at") or "")[:16].replace("T", " ")
         table.add_row(
             st,
             Text(r["name"], style=style or "bold"),
@@ -402,6 +445,7 @@ class AuditUI(App):
             Text(str(facts.get("uptime") or ""), style=style or "dim"),
             _count(r["critical"], "bold red"),
             _count(r["warning"], "yellow"),
+            Text(audited, style="dim"),
             key=key)
 
     @on(DataTable.RowHighlighted, "#hosts")
@@ -436,7 +480,8 @@ class AuditUI(App):
     # ------------------------------------------------------------- status/detail
 
     def _update_status(self) -> None:
-        rows = [r for r in self.rows]
+        ghosts = sum(1 for r in self.rows if r.get("ghost"))
+        rows = [r for r in self.rows if not r.get("ghost")]
         crit = sum(1 for r in rows if r["critical"] or r.get("error"))
         warn = sum(1 for r in rows if not r["critical"] and not r.get("error")
                    and r["warning"])
@@ -450,6 +495,8 @@ class AuditUI(App):
         text.append(str(crit), style="bold red")
         text.append("  ! ", style="yellow")
         text.append(str(warn), style="yellow")
+        text.append("  ? ", style="dim")
+        text.append(str(ghosts), style="dim" if not ghosts else "bold magenta")
         text.append(f" | {datetime.datetime.now().strftime('%H:%M:%S')}", style="dim")
         if self._busy and self._job_note:
             text.append(f" | {self._job_note}", style="bold magenta")
@@ -482,8 +529,14 @@ class AuditUI(App):
         label = " ".join(str(v) for v in (facts.get("model"), facts.get("version")) if v)
         if label:
             text.append(f"  {label}")
+        if row.get("audited_at"):
+            text.append(f"  audited {row['audited_at'][:16].replace('T', ' ')}",
+                        style="dim")
         text.append("\n")
-        if row.get("error"):
+        if row.get("ghost"):
+            text.append("NOT IN INVENTORY - removed or renamed switch; "
+                        "press p to prune stale entries", style="bold magenta")
+        elif row.get("error"):
             text.append(f"UNREACHABLE: {row['error']}", style="bold red")
         else:
             text.append(f"✗ {row['critical']} critical", style="bold red")
@@ -535,6 +588,26 @@ class AuditUI(App):
         self.notify("Reloaded results from disk.")
 
     def action_audit(self) -> None:
+        scope_hosts = hosts_for_scope(self.inv_hosts, self.campus,
+                                      ungrouped_label=_UNGROUPED_LABEL)
+        scope_label = "all campuses" if self.campus == "All" else self.campus
+        self._request_audit(scope_hosts, scope_label)
+
+    def audit_single(self, row) -> None:
+        """Re-audit one switch (from the detail screen); merges into results."""
+        if not row or row.get("is_aggregate"):
+            self.notify("Select a single switch to re-audit.", severity="warning")
+            return
+        inv = row.get("inv")
+        if inv is None:
+            self.notify("Not in the inventory - nothing to connect with.",
+                        severity="warning")
+            return
+        if isinstance(self.screen, DetailScreen):
+            self.pop_screen()
+        self._request_audit([inv], row["name"])
+
+    def _request_audit(self, scope_hosts, scope_label) -> None:
         if self._busy:
             self.notify("A job is already running - press l for the log.",
                         severity="warning")
@@ -543,7 +616,11 @@ class AuditUI(App):
             self.notify("No inventory loaded - start with -i <inventory> to run audits.",
                         severity="warning")
             return
-        missing = [h for h in self.inv_hosts if not h.username or not h.password]
+        if not scope_hosts:
+            self.notify(f"No inventory hosts in scope '{scope_label}'.",
+                        severity="warning")
+            return
+        missing = [h for h in scope_hosts if not h.username or not h.password]
         if missing:
             default_user = next((h.username for h in self.inv_hosts if h.username), "")
 
@@ -554,11 +631,47 @@ class AuditUI(App):
                 for h in self.inv_hosts:
                     h.username = h.username or username
                     h.password = h.password or password
-                self._start_audit()
+                self._start_audit(scope_hosts, scope_label)
 
             self.push_screen(CredentialsScreen(default_user), with_creds)
             return
-        self._start_audit()
+        self._start_audit(scope_hosts, scope_label)
+
+    def action_prune(self) -> None:
+        if self._busy:
+            self.notify("A job is already running - press l for the log.",
+                        severity="warning")
+            return
+        if not self.inv_hosts:
+            self.notify("Pruning needs an inventory as the source of truth "
+                        "(start with -i).", severity="warning")
+            return
+        ghost_rows = [r for r in self.rows if r.get("ghost")]
+        if not ghost_rows:
+            self.notify("No stale entries - audit data matches the inventory.")
+            return
+        names = ", ".join(r["name"] for r in ghost_rows[:8])
+        if len(ghost_rows) > 8:
+            names += ", ..."
+
+        def confirmed(yes) -> None:
+            if not yes:
+                return
+            from .runner import prune_audit
+            try:
+                removed, messages = prune_audit(self.inv_hosts, self.outdir, apply=True)
+            except Exception as exc:
+                self.notify(f"Prune failed: {exc}", severity="error")
+                return
+            for line in messages:
+                self._log(line)
+            from .ui_data import load_audit
+            self._apply_audit(load_audit(self.outdir))
+            self.notify(f"Pruned {len(removed)} stale entr(ies).")
+
+        self.push_screen(ConfirmScreen(
+            f"Remove {len(ghost_rows)} audit entr(ies) not in the inventory?\n\n"
+            f"{names}\n\nReports will be regenerated without them."), confirmed)
 
     def action_drift(self) -> None:
         if self._busy:
@@ -604,14 +717,14 @@ class AuditUI(App):
         if not isinstance(self.screen, LogScreen):
             self.push_screen(LogScreen())
 
-    def _start_audit(self) -> None:
+    def _start_audit(self, scope_hosts, scope_label) -> None:
         self._busy = True
-        self._job_note = f"auditing 0/{len(self.inv_hosts)}..."
+        self._job_note = f"auditing {scope_label} 0/{len(scope_hosts)}..."
         self._show_log_screen()
-        self._audit_worker(list(self.inv_hosts))
+        self._audit_worker(list(scope_hosts), scope_label)
 
     @work(thread=True, exclusive=True, group="jobs")
-    def _audit_worker(self, hosts) -> None:
+    def _audit_worker(self, hosts, scope_label) -> None:
         from .runner import run_audit
 
         done = {"n": 0}
@@ -622,10 +735,11 @@ class AuditUI(App):
             self.call_from_thread(self._log,
                                   f"  {result['name']} [{result['host']}]: {state}")
             self.call_from_thread(self._set_job_note,
-                                  f"auditing {done['n']}/{len(hosts)}...")
+                                  f"auditing {scope_label} {done['n']}/{len(hosts)}...")
 
         self.call_from_thread(self._log,
-                              f"Audit started: {len(hosts)} switch(es) -> {self.outdir}")
+                              f"Audit started: {len(hosts)} switch(es) "
+                              f"[{scope_label}] -> {self.outdir}")
         try:
             audit, counts, messages = run_audit(hosts, self.outdir, progress=progress)
         except Exception as exc:

@@ -88,6 +88,18 @@ passwords in the file; if you must inline them, keep the inventory out of git
 netauditor audit -i inventory.yml -o out
 ```
 
+Scoped runs (`-g <campus>`, or a campus tab / single switch in the UI) **merge**
+into the existing `audit.json`: audited entries are replaced, everything else
+is kept, and each entry carries its own `audited_at` timestamp so mixed-age
+data is visible (fleet overview and UI both show it). `--fresh` discards
+previous results instead. Entries for switches no longer in the inventory are
+flagged as stale rather than silently kept - remove them with:
+
+```
+netauditor prune -i inventory.yml -o out          # dry run: lists stale entries
+netauditor prune -i inventory.yml -o out --yes    # remove and regenerate reports
+```
+
 Connects to every switch in parallel and runs:
 `show version`, `show interfaces status`, `show interfaces`,
 `show spanning-tree summary`, `show spanning-tree detail`,
@@ -213,9 +225,10 @@ Keys:
 | Key | Action |
 |-----|--------|
 | `↑↓` / `←→` | Navigate switches / switch campus tab. |
-| `Enter` | Drill into the selected switch (or aggregate row) - findings, interfaces, config. |
-| `a` | Run a full audit of the loaded inventory (live log screen; table refreshes when done). Prompts for credentials in-app if the inventory has none. |
+| `Enter` | Drill into the selected switch (or aggregate row) - findings, interfaces, config. `a` inside re-audits just that switch. |
+| `a` | Audit the current scope: the whole inventory on the All tab, one campus on a campus tab. Results merge into the existing audit. Prompts for credentials in-app if the inventory has none. |
 | `d` | Run the drift check + all test suites; results open in a drift screen. |
+| `p` | Prune stale entries (switches no longer in the inventory, shown dim with `?`) after a confirmation listing them. |
 | `s` | Live SSH session on the selected switch; ending it returns to the dashboard. |
 | `/` | Find switches by name/IP (Esc clears). In the detail screen: filter findings. |
 | `f` | (detail screen) cycle the severity filter. |

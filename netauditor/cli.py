@@ -8,7 +8,8 @@ from pathlib import Path
 from . import __version__, analyzer
 from .inventory import InventoryError, load_inventory
 # Re-exported here for backwards compatibility (tests, external callers).
-from .runner import _group_filename, _split_by_group, run_analyze, run_audit
+from .runner import (_group_filename, _split_by_group, prune_audit, run_analyze,
+                     run_audit)
 
 
 def _parse_formats(value: str) -> "list[str]":
@@ -57,7 +58,7 @@ def cmd_audit(args) -> int:
 
     _, counts, messages = run_audit(hosts, args.output, formats=args.formats,
                                     workers=args.workers, timeout=args.timeout,
-                                    progress=progress)
+                                    progress=progress, fresh=args.fresh)
     for line in messages:
         print(line)
     print(f"Findings: {counts['critical']} critical, {counts['warning']} warning, {counts['info']} info")
@@ -103,6 +104,34 @@ def cmd_analyze(args) -> int:
     print(f"Drift items: {result['drift']['item_count']}; "
           f"findings: {len(result['findings'])} ({criticals} critical)")
     return 1 if criticals else 0
+
+
+def cmd_prune(args) -> int:
+    try:
+        hosts = load_inventory(args.inventory, prompt_missing=False,
+                               require_credentials=False)
+    except InventoryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    try:
+        ghosts, _ = prune_audit(hosts, args.output, apply=False)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if not ghosts:
+        print("No stale entries - audit data matches the inventory.")
+        return 0
+    print(f"{len(ghosts)} audit entr(ies) not in the inventory:")
+    for name in ghosts:
+        print(f"  {name}")
+    if not args.yes:
+        print("Dry run - pass --yes to remove them and regenerate the reports.")
+        return 0
+    ghosts, messages = prune_audit(hosts, args.output, formats=args.formats, apply=True)
+    for line in messages:
+        print(line)
+    print(f"Removed {len(ghosts)} stale entr(ies).")
+    return 0
 
 
 def cmd_connect(args) -> int:
@@ -186,7 +215,22 @@ def main(argv=None) -> int:
                               "(default: all hosts)")
     p_audit.add_argument("--no-prompt", action="store_true",
                          help="never prompt for credentials (fail instead)")
+    p_audit.add_argument("--fresh", action="store_true",
+                         help="discard previous audit results instead of merging "
+                              "scoped runs into them")
     p_audit.set_defaults(func=cmd_audit)
+
+    p_prune = sub.add_parser("prune", help="remove audit entries for switches that are "
+                                           "no longer in the inventory")
+    p_prune.add_argument("-i", "--inventory", required=True,
+                         help="inventory file (the source of truth)")
+    p_prune.add_argument("-o", "--output", default="out",
+                         help="audit output dir (default: out)")
+    p_prune.add_argument("--formats", type=_parse_formats, default=["json", "html"],
+                         help="comma-separated: json,html (default: both)")
+    p_prune.add_argument("--yes", action="store_true",
+                         help="actually remove the entries (default: dry run)")
+    p_prune.set_defaults(func=cmd_prune)
 
     p_an = sub.add_parser("analyze", help="detect config drift between switches, run extra tests")
     p_an.add_argument("source", help="audit.json from an audit run, or a directory of *.cfg files")

@@ -294,19 +294,22 @@ def render_audit_html(audit: dict) -> str:
     campus_th = "<th>Campus</th>" if any_groups else ""
     body.append("<h2>Fleet overview</h2><table class='searchable' data-cat='switches'>"
                 f"<tr><th>Switch</th>{campus_th}<th>Host</th><th>Model</th>"
-                "<th>IOS</th><th>Uptime</th><th>STP mode</th><th>Critical</th><th>Warnings</th></tr>")
+                "<th>IOS</th><th>Uptime</th><th>STP mode</th><th>Critical</th>"
+                "<th>Warnings</th><th>Audited</th></tr>")
     for h in hosts:
         hc = sum(1 for f in h.get("findings", []) if f["severity"] == "critical")
         hw = sum(1 for f in h.get("findings", []) if f["severity"] == "warning")
         facts = h.get("facts", {})
         campus_td = f"<td>{_e(h.get('group'))}</td>" if any_groups else ""
+        audited = (h.get("audited_at") or "")[:16].replace("T", " ")
         body.append(
             f"<tr data-group='{_e(h.get('group', ''))}'><td><b>{_e(h['name'])}</b></td>{campus_td}"
             f"<td>{_e(h['host'])}</td>"
             f"<td>{_e(facts.get('model'))}</td><td>{_e(facts.get('version'))}</td>"
             f"<td>{_e(facts.get('uptime'))}</td><td>{_e(h.get('stp', {}).get('mode'))}</td>"
             f"<td class='{'bad' if hc else 'ok'}'>{hc}</td>"
-            f"<td class='{'bad' if hw else 'ok'}'>{hw}</td></tr>")
+            f"<td class='{'bad' if hw else 'ok'}'>{hw}</td>"
+            f"<td class='small'>{_e(audited)}</td></tr>")
     body.append("</table>")
 
     # Findings grouped by code, most severe / most frequent first

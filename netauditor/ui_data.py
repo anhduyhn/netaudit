@@ -47,6 +47,8 @@ def _row(name, host, group, inv=None, entry=None):
         "name": name,
         "host": host,
         "group": group,
+        "ghost": False,
+        "audited_at": (entry or {}).get("audited_at", ""),
         "critical": counts["critical"],
         "warning": counts["warning"],
         "info": counts["info"],
@@ -78,9 +80,22 @@ def build_rows(inv_hosts, audit) -> "list[dict]":
         rows.append(_row(h.display_name(), h.host, h.group, inv=h, entry=entry))
     for a in audit_hosts:
         if id(a) not in matched:
-            rows.append(_row(a.get("name") or a.get("host"), a.get("host"),
-                             a.get("group", ""), entry=a))
+            row = _row(a.get("name") or a.get("host"), a.get("host"),
+                       a.get("group", ""), entry=a)
+            # with an inventory loaded, an audit entry that matches no
+            # inventory host is a ghost (removed/renamed switch)
+            row["ghost"] = bool(inv_hosts)
+            rows.append(row)
     return rows
+
+
+def hosts_for_scope(inv_hosts, campus, all_label="All",
+                    ungrouped_label="ungrouped") -> list:
+    """Inventory hosts belonging to a campus tab scope."""
+    if campus == all_label:
+        return list(inv_hosts)
+    wanted = "" if campus == ungrouped_label else campus
+    return [h for h in inv_hosts if (h.group or "") == wanted]
 
 
 def aggregate_row(rows, name=ALL_ROW_NAME) -> dict:
