@@ -1,0 +1,32 @@
+#!/bin/sh
+# Rebuild dist/netauditor.exe before pushing when tool sources changed.
+#
+# One-time setup per clone:   git config core.hooksPath .githooks
+# Skip for a single push:     NETAUDITOR_SKIP_BUILD=1 git push
+#
+# Tag pushes are ignored - the release workflow builds those on CI.
+
+[ -n "$NETAUDITOR_SKIP_BUILD" ] && exit 0
+
+zero=0000000000000000000000000000000000000000
+changed=0
+while read local_ref local_sha remote_ref remote_sha; do
+    case "$local_ref" in refs/tags/*) continue ;; esac
+    if [ "$remote_sha" = "$zero" ]; then
+        changed=1   # new branch: no base to diff against, rebuild to be safe
+    elif git diff --name-only "$remote_sha..$local_sha" 2>/dev/null \
+            | grep -qE '^(netauditor/|packaging/|pyproject\.toml)'; then
+        changed=1
+    fi
+done
+
+[ "$changed" = "0" ] && exit 0
+
+echo "pre-push: tool sources changed - rebuilding dist/netauditor.exe"
+echo "          (NETAUDITOR_SKIP_BUILD=1 git push  to skip)"
+if command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File packaging/build-exe.ps1
+else
+    echo "pre-push: powershell.exe not found - skipping local exe rebuild"
+    exit 0
+fi

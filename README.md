@@ -282,3 +282,15 @@ shared exe - send the template and let recipients add their own.
 ```
 python -m unittest discover -s tests
 ```
+
+To keep `dist\netauditor.exe` automatically up to date, enable the bundled
+pre-push hook once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+From then on, any push whose commits touch `netauditor/`, `packaging/` or
+`pyproject.toml` rebuilds the local exe first (a failing build blocks the
+push). Doc-only pushes and tag pushes skip the rebuild - tags are built by the
+release workflow on CI. Bypass once with `NETAUDITOR_SKIP_BUILD=1 git push`.
