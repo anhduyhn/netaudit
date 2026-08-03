@@ -134,6 +134,57 @@ def cmd_prune(args) -> int:
     return 0
 
 
+def cmd_status(args) -> int:
+    try:
+        hosts = load_inventory(args.inventory, prompt_missing=False,
+                               require_credentials=False)
+    except InventoryError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    hosts, err = _filter_by_group(hosts, lambda h: h.group, args.group)
+    if err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+
+    from .probe import probe_all
+    from .ui_data import load_audit
+
+    # audit flags column (best effort - fine if no audit exists yet)
+    flags = {}
+    for e in (load_audit(args.output) or {}).get("hosts", []):
+        crit = sum(1 for f in e.get("findings", []) if f["severity"] == "critical")
+        warn = sum(1 for f in e.get("findings", []) if f["severity"] == "warning")
+        entry = (crit, warn, bool(e.get("error")))
+        for key in (e.get("host"), (e.get("name") or "").lower()):
+            if key:
+                flags[key] = entry
+
+    print(f"Probing {len(hosts)} switch(es) (TCP:{'/'.join(sorted({str(h.port) for h in hosts}))}, "
+          f"timeout {args.timeout}s)...")
+    results = probe_all(((i, h.host, h.port) for i, h in enumerate(hosts)),
+                        timeout=args.timeout)
+    down = 0
+    for i, h in enumerate(hosts):
+        ms = results.get(i)
+        if ms is None:
+            down += 1
+        state = "DOWN" if ms is None else "up"
+        latency = "-" if ms is None else f"{ms} ms"
+        flag = flags.get(h.host) or flags.get(h.display_name().lower())
+        if flag is None:
+            audit = "not audited"
+        elif flag[2]:
+            audit = "unreachable at last audit"
+        elif not flag[0] and not flag[1]:
+            audit = "clean"
+        else:
+            audit = f"crit {flag[0]}  warn {flag[1]}"
+        print(f"{state:<5} {h.display_name():<26} {h.host:<16} "
+              f"{(h.group or ''):<12} {latency:>7}   {audit}")
+    print(f"\n{len(hosts) - down}/{len(hosts)} up, {down} down")
+    return 1 if down else 0
+
+
 def cmd_connect(args) -> int:
     try:
         hosts = load_inventory(args.inventory, prompt_missing=not args.no_prompt)
@@ -192,7 +243,8 @@ def cmd_ui(args) -> int:
     out = Path(args.output)
     outdir = out if out.is_dir() or not out.suffix else out.parent
     AuditUI(build_rows(hosts, audit), inv_hosts=hosts, outdir=outdir,
-            generated=(audit or {}).get("generated", "")).run()
+            generated=(audit or {}).get("generated", ""),
+            probe_interval=args.interval).run()
     return 0
 
 
@@ -249,6 +301,18 @@ def main(argv=None) -> int:
                       help="comma-separated switch names to compare (default: all in source)")
     p_an.set_defaults(func=cmd_analyze)
 
+    p_status = sub.add_parser("status", help="quick reachability sweep "
+                                             "(TCP connect to each switch's SSH port)")
+    p_status.add_argument("-i", "--inventory", required=True,
+                          help="inventory file (YAML or plain text)")
+    p_status.add_argument("-g", "--group", default="",
+                          help="probe only these groups/campuses, comma-separated")
+    p_status.add_argument("-o", "--output", default="out",
+                          help="audit output dir for the audit-flags column (default: out)")
+    p_status.add_argument("--timeout", type=float, default=3.0,
+                          help="per-host connect timeout seconds (default: 3)")
+    p_status.set_defaults(func=cmd_status)
+
     p_conn = sub.add_parser("connect",
                             help="open a live SSH session to a switch using inventory credentials")
     p_conn.add_argument("target", nargs="?", default="",
@@ -270,6 +334,8 @@ def main(argv=None) -> int:
                       help="show only these groups/campuses, comma-separated")
     p_ui.add_argument("--no-prompt", action="store_true",
                       help="never prompt for credentials (SSH action may be unavailable)")
+    p_ui.add_argument("--interval", type=int, default=15,
+                      help="watch-mode probe interval in seconds (default: 15, min 5)")
     p_ui.set_defaults(func=cmd_ui)
 
     args = parser.parse_args(argv)

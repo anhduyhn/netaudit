@@ -7,6 +7,7 @@ checks run as background jobs with a live log screen.
 from __future__ import annotations
 
 import datetime
+import time
 from pathlib import Path
 
 from rich.text import Text
@@ -322,11 +323,13 @@ class AuditUI(App):
         Binding("l", "show_log", "log", show=False),
         Binding("r", "reload", "reload", show=False),
         Binding("p", "prune", "prune", show=False),
+        Binding("w", "toggle_watch", "watch", show=False),
         Binding("slash", "find", "find", show=False),
         Binding("escape", "clear_find", show=False),
     ]
 
-    def __init__(self, rows, inv_hosts=None, outdir="out", generated=""):
+    def __init__(self, rows, inv_hosts=None, outdir="out", generated="",
+                 probe_interval=15):
         super().__init__()
         self.rows = rows
         self.inv_hosts = list(inv_hosts or [])
@@ -340,6 +343,12 @@ class AuditUI(App):
         self._busy = False
         self._job_note = ""
         self._rowmap = {}
+        # live reachability (watch mode)
+        self.watch = bool(inv_hosts)
+        self.probe_interval = max(5, int(probe_interval))
+        self.probe_results: "dict[str, dict]" = {}
+        self._probing = False
+        self._next_scan_at = time.monotonic()
 
     # ------------------------------------------------------------- layout
 
@@ -354,8 +363,9 @@ class AuditUI(App):
         yield Static(id="detailstrip")
         yield Static(_hints([("↑↓", "nav"), ("←→", "campus"), ("⏎", "detail"),
                              ("a", "audit scope"), ("d", "drift"), ("s", "ssh"),
-                             ("l", "log"), ("/", "find"), ("p", "prune"),
-                             ("r", "reload"), ("q", "quit")]), id="hintbar")
+                             ("w", "watch"), ("l", "log"), ("/", "find"),
+                             ("p", "prune"), ("r", "reload"), ("q", "quit")]),
+                     id="hintbar")
 
     def on_mount(self) -> None:
         self._campus_names = ["All"] + [_UNGROUPED_LABEL if c == "" else c
@@ -366,11 +376,14 @@ class AuditUI(App):
         table.cursor_type = "row"
         table.zebra_stripes = True
         table.border_title = "Switches"
-        table.add_columns("St", "Switch", "IP", "Campus", "Model", "IOS",
-                          "Uptime", "C", "W", "Audited")
+        for label, key in [("St", "st"), ("Switch", "switch"), ("IP", "ip"),
+                           ("Campus", "campus"), ("Model", "model"), ("IOS", "ios"),
+                           ("Audit", "audit"), ("ms", "ms"), ("Seen", "seen"),
+                           ("Audited", "audited")]:
+            table.add_column(label, key=key)
         self.last_drift = load_drift(self.outdir)
         self._populate_hosts()
-        self.set_interval(1.0, self._update_status)
+        self.set_interval(1.0, self._tick)
         self._update_status()
         table.focus()
 
@@ -395,9 +408,7 @@ class AuditUI(App):
         agg = aggregate_row(scope, agg_name)
         self._rowmap["agg"] = agg
         table.add_row(Text("≡", style="bold"), Text(agg_name, style="bold"),
-                      "", "", "", "", "",
-                      _count(agg["critical"], "bold red"),
-                      _count(agg["warning"], "yellow"), "", key="agg")
+                      "", "", "", "", self._audit_cell(agg), "", "", "", key="agg")
         if self.campus == "All":
             for campus in campuses(scope):
                 label = _UNGROUPED_LABEL if campus == "" else campus
@@ -415,36 +426,63 @@ class AuditUI(App):
         self.current_row = agg
         self._update_detailstrip()
 
+    def _st_cell(self, r) -> Text:
+        """Live reachability glyph when watch is on; audit-state glyph otherwise."""
+        if r.get("ghost"):
+            return Text("?", style="dim")
+        if self.watch:
+            pr = self.probe_results.get(r.get("host") or "")
+            if pr is not None:
+                return Text("●", style="green") if pr["ok"] else Text("✗", style="bold red")
+            return Text("·", style="dim")  # not probed yet
+        if r.get("error") or r["critical"]:
+            return Text("✗", style="bold red")
+        if r["warning"]:
+            return Text("!", style="yellow")
+        return Text("●", style="green")
+
+    def _audit_cell(self, r) -> Text:
+        """Audit flags: ✗n criticals, !n warnings, ● clean, - never audited."""
+        if r.get("ghost"):
+            return Text("stale", style="dim")
+        if r.get("error"):
+            return Text("unreach", style="bold red")
+        if not r.get("audited_at") and not r["findings"]:
+            return Text("-", style="dim")
+        cell = Text()
+        if r["critical"]:
+            cell.append(f"✗{r['critical']} ", style="bold red")
+        if r["warning"]:
+            cell.append(f"!{r['warning']}", style="yellow")
+        if not r["critical"] and not r["warning"]:
+            cell.append("●", style="green")
+        return cell
+
+    def _probe_cells(self, r) -> "tuple[Text, Text]":
+        pr = self.probe_results.get(r.get("host") or "")
+        if not self.watch or pr is None:
+            return Text("-", style="dim"), Text("-", style="dim")
+        ms = Text(f"{pr['ms']}" if pr["ok"] else "-",
+                  style="" if pr["ok"] else "red")
+        seen = Text(pr.get("seen") or "-", style="dim")
+        return ms, seen
+
     def _add_host_row(self, table, r) -> None:
         key = f"h:{id(r)}"
         self._rowmap[key] = r
-        if r.get("ghost"):
-            st = Text("?", style="dim")
-            style = "dim"
-        elif r.get("error"):
-            st = Text("✗", style="bold red")
-            style = "red"
-        elif r["critical"]:
-            st = Text("✗", style="bold red")
-            style = ""
-        elif r["warning"]:
-            st = Text("!", style="yellow")
-            style = ""
-        else:
-            st = Text("●", style="green")
-            style = ""
+        style = "dim" if r.get("ghost") else ("red" if r.get("error") else "")
         facts = r.get("facts") or {}
         audited = (r.get("audited_at") or "")[:16].replace("T", " ")
+        ms, seen = self._probe_cells(r)
         table.add_row(
-            st,
+            self._st_cell(r),
             Text(r["name"], style=style or "bold"),
             Text(r["host"], style=style or ""),
             Text(r.get("group") or "", style=style or "blue"),
             Text(str(facts.get("model") or ""), style=style or ""),
             Text(str(facts.get("version") or ""), style=style or "dim"),
-            Text(str(facts.get("uptime") or ""), style=style or "dim"),
-            _count(r["critical"], "bold red"),
-            _count(r["warning"], "yellow"),
+            self._audit_cell(r),
+            ms, seen,
             Text(audited, style="dim"),
             key=key)
 
@@ -477,6 +515,57 @@ class AuditUI(App):
     def _find_done(self, _event) -> None:
         self.query_one("#hosts", HostTable).focus()
 
+    # ------------------------------------------------------------- watch mode
+
+    def action_toggle_watch(self) -> None:
+        self.watch = not self.watch
+        if self.watch:
+            self._next_scan_at = time.monotonic()
+            self.notify(f"Watch on - probing every {self.probe_interval}s.")
+        else:
+            self.notify("Watch off.")
+        self._populate_hosts()
+        self._update_status()
+
+    def _tick(self) -> None:
+        if self.watch and not self._probing and time.monotonic() >= self._next_scan_at:
+            targets = [(r["host"], r["host"],
+                        r["inv"].port if r.get("inv") else 22)
+                       for r in self.rows if r.get("host") and not r.get("ghost")]
+            if targets:
+                self._probing = True
+                self._probe_worker(targets)
+        self._update_status()
+
+    @work(thread=True, exclusive=True, group="probe")
+    def _probe_worker(self, targets) -> None:
+        from .probe import probe_all
+        results = probe_all(targets, timeout=3.0)
+        stamp = datetime.datetime.now().strftime("%H:%M:%S")
+        self.call_from_thread(self._apply_probe, results, stamp)
+
+    def _apply_probe(self, results, stamp) -> None:
+        self._probing = False
+        self._next_scan_at = time.monotonic() + self.probe_interval
+        for host, ms in results.items():
+            rec = self.probe_results.setdefault(host, {})
+            rec["ok"] = ms is not None
+            rec["ms"] = ms
+            if ms is not None:
+                rec["seen"] = stamp
+        table = self.query_one("#hosts", HostTable)
+        for key, row in self._rowmap.items():
+            if not key.startswith("h:") or row.get("host") not in results:
+                continue
+            ms_cell, seen_cell = self._probe_cells(row)
+            try:
+                table.update_cell(key, "st", self._st_cell(row))
+                table.update_cell(key, "ms", ms_cell)
+                table.update_cell(key, "seen", seen_cell)
+            except Exception:
+                pass  # table repopulated mid-apply; next sweep catches up
+        self._update_status()
+
     # ------------------------------------------------------------- status/detail
 
     def _update_status(self) -> None:
@@ -497,6 +586,16 @@ class AuditUI(App):
         text.append(str(warn), style="yellow")
         text.append("  ? ", style="dim")
         text.append(str(ghosts), style="dim" if not ghosts else "bold magenta")
+        if self.watch:
+            probed = [self.probe_results.get(r["host"]) for r in rows if r.get("host")]
+            up = sum(1 for p in probed if p and p["ok"])
+            down = sum(1 for p in probed if p and not p["ok"])
+            text.append(" | live ", style="dim")
+            text.append(f"↑{up}", style="green")
+            text.append(f" ↓{down}", style="bold red" if down else "dim")
+            remaining = max(0, int(self._next_scan_at - time.monotonic()))
+            text.append(" | scanning..." if self._probing else f" | next scan {remaining}s",
+                        style="dim")
         text.append(f" | {datetime.datetime.now().strftime('%H:%M:%S')}", style="dim")
         if self._busy and self._job_note:
             text.append(f" | {self._job_note}", style="bold magenta")

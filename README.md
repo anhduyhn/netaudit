@@ -205,7 +205,20 @@ target at all) you get a numbered list to pick from. Type `exit` on the switch
 to end the session. Ctrl+C is passed through to the switch, and arrow keys /
 history work as normal. Host keys are auto-accepted, same policy as the audit.
 
-## 4. Command center (terminal UI)
+## 4. Status (quick reachability check)
+
+```
+netauditor status -i inventory.yml [-g sydenham]
+```
+
+One concurrent sweep: a bare TCP connect to each switch's SSH port (no login,
+safe to run any time). Prints up/DOWN, connect latency, and - when audit output
+exists - each switch's audit flags in a separate column. Exit code 1 if
+anything is down, so it doubles as a cron-able dead-switch alarm. Reachability
+and audit state are deliberately separate: "up" only means the management port
+answers.
+
+## 5. Command center (terminal UI)
 
 ```
 netauditor ui -i inventory.yml -o out
@@ -229,6 +242,7 @@ Keys:
 | `a` | Audit the current scope: the whole inventory on the All tab, one campus on a campus tab. Results merge into the existing audit. Prompts for credentials in-app if the inventory has none. |
 | `d` | Run the drift check + all test suites; results open in a drift screen. |
 | `p` | Prune stale entries (switches no longer in the inventory, shown dim with `?`) after a confirmation listing them. |
+| `w` | Toggle watch mode (on by default with an inventory): TCP-probes every switch on an interval (`--interval`, default 15s). `St` shows live up/down, `ms`/`Seen` columns update, and the status bar shows `live ↑N ↓N | next scan Ns`. Audit flags stay in their own column. |
 | `s` | Live SSH session on the selected switch; ending it returns to the dashboard. |
 | `/` | Find switches by name/IP (Esc clears). In the detail screen: filter findings. |
 | `f` | (detail screen) cycle the severity filter. |
