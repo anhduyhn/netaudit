@@ -193,21 +193,34 @@ target at all) you get a numbered list to pick from. Type `exit` on the switch
 to end the session. Ctrl+C is passed through to the switch, and arrow keys /
 history work as normal. Host keys are auto-accepted, same policy as the audit.
 
-## 4. Dashboard (terminal UI)
+## 4. Command center (terminal UI)
 
 ```
 netauditor ui -i inventory.yml -o out
 ```
 
-An interactive terminal dashboard (built on [Textual](https://github.com/Textualize/textual))
-over the latest audit: switch list with per-host critical/warning counts on the
-left (an `= ALL SWITCHES =` row aggregates the whole fleet), and tabs for
-findings, interfaces, and the collected config on the right. Keys: `f` cycles
-the severity filter, `/` focuses the free-text finding filter, `s` drops into
-a live SSH session to the selected switch (using inventory credentials) and
-returns to the dashboard when the session ends, `q` quits. `-g` scopes it to a
-campus. Both `-i` and `-o` are optional - with only an inventory you get the
-host list and SSH; with only audit output you get the results browser.
+An interactive terminal command center (built on
+[Textual](https://github.com/Textualize/textual)): switch list with per-host
+critical/warning counts on the left (an `= ALL SWITCHES =` row aggregates the
+whole fleet), and tabs for findings, interfaces, config, drift, and a job log
+on the right.
+
+Keys:
+
+| Key | Action |
+|-----|--------|
+| `a` | Run a full audit of the loaded inventory (progress streams to the Log tab; the host list and findings refresh when it finishes). Prompts for credentials in-app if the inventory has none. |
+| `d` | Run the drift check + all test suites over the latest audit; results land in the Drift tab. |
+| `s` | Drop into a live SSH session on the selected switch; ending it returns to the dashboard. |
+| `f` / `/` | Cycle severity filter / free-text finding filter. |
+| `r` | Reload results from disk (e.g. after a CLI run). |
+| `q` | Quit. |
+
+Jobs write the same `audit.json`/`audit.html`/`drift.html`/per-campus files as
+the CLI - the UI and CLI share one execution layer, so outputs are identical.
+`-g` scopes everything to a campus. Both `-i` and `-o` are optional: with only
+an inventory you get the host list, audit runs and SSH; with only audit output
+you get the results browser and drift checks.
 
 ## Typical workflow
 

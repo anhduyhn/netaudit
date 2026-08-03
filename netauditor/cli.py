@@ -1,39 +1,14 @@
-"""netauditor command-line interface: `audit` and `analyze` subcommands."""
+"""netauditor command-line interface."""
 from __future__ import annotations
 
 import argparse
-import datetime
-import re
 import sys
 from pathlib import Path
 
-from . import __version__, analyzer, checks, report
+from . import __version__, analyzer
 from .inventory import InventoryError, load_inventory
-
-
-def _now() -> str:
-    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
-
-
-def _safe_filename(name: str) -> str:
-    return re.sub(r"[^\w.\-]+", "_", name) or "switch"
-
-
-def _group_filename(group: str, suffix: str) -> str:
-    name = _safe_filename(group).lower()
-    if name in ("audit", "drift"):  # don't clobber the combined reports
-        name = f"group-{name}"
-    return f"{name}{suffix}"
-
-
-def _split_by_group(reports: "list[dict]") -> "list[tuple[str, list]]":
-    """Split host reports by group; empty when no host carries a group name."""
-    by = {}
-    for r in reports:
-        by.setdefault(r.get("group") or "", []).append(r)
-    if not any(g for g in by):
-        return []
-    return sorted((g or "ungrouped", members) for g, members in by.items())
+# Re-exported here for backwards compatibility (tests, external callers).
+from .runner import _group_filename, _split_by_group, run_analyze, run_audit
 
 
 def _parse_formats(value: str) -> "list[str]":
@@ -73,8 +48,6 @@ def cmd_audit(args) -> int:
         print(f"error: {err}", file=sys.stderr)
         return 2
 
-    from .collector import collect_all  # deferred so `analyze` works without netmiko
-
     scope = f" in group(s) {args.group}" if args.group else ""
     print(f"Auditing {len(hosts)} switch(es){scope} with {args.workers} worker(s)...")
 
@@ -82,35 +55,11 @@ def cmd_audit(args) -> int:
         state = f"FAILED ({result['error']})" if result.get("error") else "collected"
         print(f"  {result['name']} [{result['host']}]: {state}")
 
-    results = collect_all(hosts, workers=args.workers, timeout=args.timeout, progress=progress)
-    reports = [checks.build_host_report(r) for r in results]
-    audit = {
-        "generated": _now(),
-        "tool_version": __version__,
-        "hosts": reports,
-    }
-
-    outdir = Path(args.output)
-    outdir.mkdir(parents=True, exist_ok=True)
-    if "json" in args.formats:
-        report.write_json(audit, outdir / "audit.json")
-        print(f"Wrote {outdir / 'audit.json'}")
-    if "html" in args.formats:
-        (outdir / "audit.html").write_text(report.render_audit_html(audit), encoding="utf-8")
-        print(f"Wrote {outdir / 'audit.html'}")
-        for gname, ghosts in _split_by_group(reports):
-            gpath = outdir / _group_filename(gname, ".html")
-            gpath.write_text(report.render_audit_html(dict(audit, hosts=ghosts, scope=gname)),
-                             encoding="utf-8")
-            print(f"Wrote {gpath}")
-    cfg_dir = outdir / "configs"
-    cfg_dir.mkdir(exist_ok=True)
-    for h in reports:
-        if h["config"]:
-            (cfg_dir / f"{_safe_filename(h['name'])}.cfg").write_text(h["config"], encoding="utf-8")
-    print(f"Wrote {sum(1 for h in reports if h['config'])} config export(s) to {cfg_dir}")
-
-    counts = checks.count_findings(reports)
+    _, counts, messages = run_audit(hosts, args.output, formats=args.formats,
+                                    workers=args.workers, timeout=args.timeout,
+                                    progress=progress)
+    for line in messages:
+        print(line)
     print(f"Findings: {counts['critical']} critical, {counts['warning']} warning, {counts['info']} info")
     return 1 if counts["critical"] else 0
 
@@ -142,52 +91,17 @@ def cmd_analyze(args) -> int:
         print("note: only one config found - drift needs 2+ switches; running tests only.")
 
     try:
-        drift = analyzer.compute_drift(configs, baseline=args.baseline) if len(configs) >= 2 else \
-            {"hosts": sorted(configs), "baseline": args.baseline, "item_count": 0, "items": []}
-        findings, tests_run = analyzer.run_tests(configs, args.tests)
+        result, messages = run_analyze(configs, groups, args.output, tests=args.tests,
+                                       baseline=args.baseline, formats=args.formats,
+                                       group_filter=args.group or "")
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-
-    result = {
-        "generated": _now(),
-        "tool_version": __version__,
-        "hosts": drift["hosts"],
-        "groups": {n: groups.get(n, "") for n in configs},
-        "group_filter": args.group or "",
-        "tests_run": tests_run,
-        "drift": drift,
-        "findings": findings,
-    }
-
-    outdir = Path(args.output)
-    outdir.mkdir(parents=True, exist_ok=True)
-    if "json" in args.formats:
-        report.write_json(result, outdir / "drift.json")
-        print(f"Wrote {outdir / 'drift.json'}")
-    if "html" in args.formats:
-        (outdir / "drift.html").write_text(report.render_drift_html(result), encoding="utf-8")
-        print(f"Wrote {outdir / 'drift.html'}")
-        group_names = sorted({g for g in (groups.get(n, "") for n in configs) if g})
-        for gname in group_names:
-            gconfigs = {n: c for n, c in configs.items() if groups.get(n, "") == gname}
-            if len(gconfigs) < 2:
-                print(f"note: group '{gname}' has only {len(gconfigs)} config(s) - "
-                      "skipping its per-group drift report")
-                continue
-            gbaseline = args.baseline if args.baseline in gconfigs else None
-            gfindings, _ = analyzer.run_tests(gconfigs, args.tests)
-            gresult = dict(result,
-                           hosts=sorted(gconfigs),
-                           group_filter=gname,
-                           drift=analyzer.compute_drift(gconfigs, baseline=gbaseline),
-                           findings=gfindings)
-            gpath = outdir / _group_filename(gname, ".drift.html")
-            gpath.write_text(report.render_drift_html(gresult), encoding="utf-8")
-            print(f"Wrote {gpath}")
-
-    criticals = sum(1 for f in findings if f["severity"] == "critical")
-    print(f"Drift items: {drift['item_count']}; findings: {len(findings)} ({criticals} critical)")
+    for line in messages:
+        print(line)
+    criticals = sum(1 for f in result["findings"] if f["severity"] == "critical")
+    print(f"Drift items: {result['drift']['item_count']}; "
+          f"findings: {len(result['findings'])} ({criticals} critical)")
     return 1 if criticals else 0
 
 
@@ -246,7 +160,9 @@ def cmd_ui(args) -> int:
         print(f"error: the dashboard needs the 'textual' package (pip install textual): {exc}",
               file=sys.stderr)
         return 2
-    AuditUI(build_rows(hosts, audit)).run()
+    out = Path(args.output)
+    outdir = out if out.is_dir() or not out.suffix else out.parent
+    AuditUI(build_rows(hosts, audit), inv_hosts=hosts, outdir=outdir).run()
     return 0
 
 

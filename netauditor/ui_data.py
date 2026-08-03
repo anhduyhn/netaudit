@@ -21,6 +21,19 @@ def load_audit(path):
         return None
 
 
+def load_drift(path):
+    """Load drift.json from a file or an output directory. Returns dict or None."""
+    p = Path(path)
+    if p.is_dir():
+        p = p / "drift.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
 def _row(name, host, group, inv=None, entry=None):
     findings = []
     for f in (entry or {}).get("findings", []):
