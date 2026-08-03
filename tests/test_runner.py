@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 
 from netauditor.inventory import Host
-from netauditor.runner import find_ghosts, merge_audit_hosts, prune_audit, run_audit
+from netauditor.runner import (find_ghosts, merge_audit_hosts, prune_audit,
+                               regenerate_reports, run_audit)
 
 
 def entry(name, host, group="", marker=""):
@@ -66,6 +67,42 @@ class TestRunAuditMerge(unittest.TestCase):
     def test_fresh_discards_existing(self):
         audit, _, _ = run_audit([], self.tmp, fresh=True)
         self.assertEqual(audit["hosts"], [])
+
+
+class TestRegenerateReports(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        data = {"generated": "2026-08-03T10:00:00",
+                "hosts": [dict(entry("sy1", "10.1.0.1", group="sydenham"),
+                               findings=[{"code": "SSH_V1", "severity": "warning",
+                                          "interface": "", "message": "no ssh v2"}]),
+                          entry("sy2", "10.1.0.2", group="sydenham"),
+                          entry("de1", "10.2.0.1", group="delahey")]}
+        (self.tmp / "audit.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def test_regenerates_combined_and_per_campus(self):
+        messages = regenerate_reports(self.tmp)
+        self.assertTrue((self.tmp / "audit.html").exists())
+        self.assertTrue((self.tmp / "sydenham.html").exists())
+        self.assertTrue((self.tmp / "delahey.html").exists())
+        self.assertTrue(any("sydenham.html" in m for m in messages))
+
+    def test_per_campus_contains_only_its_switches(self):
+        regenerate_reports(self.tmp)
+        syd = (self.tmp / "sydenham.html").read_text(encoding="utf-8")
+        self.assertIn("sy1", syd)
+        self.assertNotIn("de1", syd)
+
+    def test_fix_blocks_present_after_regeneration(self):
+        regenerate_reports(self.tmp)
+        for name in ("audit.html", "sydenham.html"):
+            html = (self.tmp / name).read_text(encoding="utf-8")
+            self.assertIn("class='fixblock'", html, name)
+            self.assertIn("ip ssh version 2", html, name)
+
+    def test_missing_audit_raises(self):
+        with self.assertRaises(FileNotFoundError):
+            regenerate_reports(self.tmp / "nope")
 
 
 class TestPrune(unittest.TestCase):

@@ -190,6 +190,15 @@ newest 30 are kept) and git-commits `out/configs/` - a free per-switch config
 history you can `git log` forever. Disable either with `--no-snapshot` /
 `--no-backup`.
 
+HTML reports are build artefacts of the version that wrote them, so after
+upgrading netauditor the files on disk keep their old look until the next
+audit. To re-render every report (combined **and** per-campus) from the
+existing data without contacting any switch:
+
+```
+netauditor report -o out
+```
+
 ## 2. Diff (what changed since last time)
 
 ```

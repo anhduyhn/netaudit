@@ -158,6 +158,43 @@ def run_audit(hosts, outdir, formats=("json", "html"), workers=8, timeout=30,
     return audit, checks.count_findings(reports), messages
 
 
+def regenerate_reports(outdir, formats=("json", "html")) -> "list[str]":
+    """Re-render every report from the existing audit.json / drift.json.
+
+    Report files are build artefacts of the code that wrote them, so this
+    refreshes them after an upgrade without re-auditing any switch.
+    """
+    outdir = Path(outdir)
+    messages = []
+    audit_path = outdir / "audit.json"
+    if not audit_path.exists():
+        raise FileNotFoundError(f"no audit.json in {outdir}")
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    messages.extend(_write_audit_outputs(audit, outdir, formats))
+
+    drift_path = outdir / "drift.json"
+    if drift_path.exists() and "html" in formats:
+        drift = json.loads(drift_path.read_text(encoding="utf-8"))
+        (outdir / "drift.html").write_text(report.render_drift_html(drift),
+                                           encoding="utf-8")
+        messages.append(f"Wrote {outdir / 'drift.html'}")
+        groups = drift.get("groups") or {}
+        for gname in sorted({g for g in groups.values() if g}):
+            members = sorted(n for n, g in groups.items() if g == gname)
+            if len(members) < 2:
+                continue
+            gitems = [i for i in (drift.get("drift") or {}).get("items", [])
+                      if set(i.get("present_on", [])) & set(members)]
+            gresult = dict(drift, hosts=members, group_filter=gname,
+                           drift=dict(drift.get("drift") or {}, items=gitems),
+                           findings=[f for f in drift.get("findings", [])
+                                     if not f.get("host") or f.get("host") in members])
+            gpath = outdir / _group_filename(gname, ".drift.html")
+            gpath.write_text(report.render_drift_html(gresult), encoding="utf-8")
+            messages.append(f"Wrote {gpath}")
+    return messages
+
+
 def find_ghosts(inv_hosts, audit_hosts) -> "list[dict]":
     """Audit entries with no matching inventory host (removed/renamed switches)."""
     inv_keys = set()

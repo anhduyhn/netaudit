@@ -229,6 +229,19 @@ def cmd_status(args) -> int:
     return 1 if down else 0
 
 
+def cmd_report(args) -> int:
+    from .runner import regenerate_reports
+    try:
+        messages = regenerate_reports(args.output, formats=args.formats)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    for line in messages:
+        print(line)
+    print("Reports regenerated from the existing audit data (no switches contacted).")
+    return 0
+
+
 def cmd_diff(args) -> int:
     from .history import (config_diff, diff_audits, list_snapshots, load_snapshot,
                           previous_snapshot)
@@ -405,6 +418,14 @@ def main(argv=None) -> int:
     p_audit.add_argument("--no-backup", action="store_true",
                          help="do not git-commit the exported configs")
     p_audit.set_defaults(func=cmd_audit)
+
+    p_report = sub.add_parser("report", help="re-render all HTML reports from the "
+                                             "existing audit data (no SSH)")
+    p_report.add_argument("-o", "--output", default="out",
+                          help="audit output dir (default: out)")
+    p_report.add_argument("--formats", type=_parse_formats, default=["json", "html"],
+                          help="comma-separated: json,html (default: both)")
+    p_report.set_defaults(func=cmd_report)
 
     p_diff = sub.add_parser("diff", help="compare the current audit with an earlier "
                                          "snapshot: fixed / new / unchanged findings")
