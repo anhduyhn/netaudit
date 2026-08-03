@@ -45,6 +45,9 @@ summary { cursor: pointer; font-weight: 600; }
                  font-size: 13px; width: 280px; }
 .toolbar select { padding: 7px 10px; border: 1px solid #cdd2da; border-radius: 8px;
                   font-size: 13px; background: #fff; max-width: 300px; }
+.banner-unsaved { background: #ffb020; color: #3a2500; font-weight: 700;
+                  padding: 10px 14px; border-radius: 8px; margin: 10px 0; }
+.unsaved-mark { color: #b45f06; font-weight: 700; }
 .findgroup { background: #fff; border: 1px solid #e2e5ea; border-radius: 8px;
              padding: 8px 14px; margin: 8px 0; }
 .findgroup summary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -289,6 +292,17 @@ def render_audit_html(audit: dict) -> str:
                         ("Info", counts["info"])]))
     body.append(_toolbar("Filter: switch, port, code, text..."))
 
+    unsaved = [h["name"] for h in hosts
+               if any(f.get("code") == "UNSAVED_CHANGES" for f in h.get("findings", []))]
+    if unsaved:
+        names = ", ".join(_e(n) for n in unsaved[:10]) + (", ..." if len(unsaved) > 10 else "")
+        body.append(
+            f"<div class='banner-unsaved'>&#9888; {len(unsaved)} switch(es) have UNSAVED "
+            f"config changes - the running config is lost at the next reboot: {names}. "
+            "Save them ('copy running-config startup-config' or your save playbook), "
+            "then re-audit.</div>")
+    unsaved_set = set(unsaved)
+
     # Fleet overview
     any_groups = any(h.get("group") for h in hosts)
     campus_th = "<th>Campus</th>" if any_groups else ""
@@ -302,8 +316,10 @@ def render_audit_html(audit: dict) -> str:
         facts = h.get("facts", {})
         campus_td = f"<td>{_e(h.get('group'))}</td>" if any_groups else ""
         audited = (h.get("audited_at") or "")[:16].replace("T", " ")
+        mark = " <span class='unsaved-mark' title='unsaved config changes'>&#177;</span>" \
+            if h["name"] in unsaved_set else ""
         body.append(
-            f"<tr data-group='{_e(h.get('group', ''))}'><td><b>{_e(h['name'])}</b></td>{campus_td}"
+            f"<tr data-group='{_e(h.get('group', ''))}'><td><b>{_e(h['name'])}</b>{mark}</td>{campus_td}"
             f"<td>{_e(h['host'])}</td>"
             f"<td>{_e(facts.get('model'))}</td><td>{_e(facts.get('version'))}</td>"
             f"<td>{_e(facts.get('uptime'))}</td><td>{_e(h.get('stp', {}).get('mode'))}</td>"

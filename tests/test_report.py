@@ -69,6 +69,22 @@ class TestAuditHtml(unittest.TestCase):
         self.assertNotIn("<script>alert(1)</script>", self.html)
         self.assertIn("&lt;script&gt;", self.html)
 
+    def test_no_unsaved_banner_without_finding(self):
+        self.assertNotIn("class='banner-unsaved'", self.html)
+
+
+class TestUnsavedBanner(unittest.TestCase):
+    def test_banner_and_mark_present(self):
+        audit = minimal_audit()
+        audit["hosts"][0]["findings"].append(
+            {"code": "UNSAVED_CHANGES", "severity": "warning", "interface": "",
+             "message": "running differs from startup"})
+        html = report.render_audit_html(audit)
+        self.assertIn("class='banner-unsaved'", html)
+        self.assertIn("1 switch(es) have UNSAVED", html)
+        self.assertIn("sw1", html.split("class='banner-unsaved'")[1][:300])
+        self.assertIn("class='unsaved-mark'", html)
+
 
 class TestDriftHtml(unittest.TestCase):
     def setUp(self):

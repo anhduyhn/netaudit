@@ -195,6 +195,8 @@ class DetailScreen(Screen):
         header.append(f"\n✗ {row['critical']} critical", style="bold red")
         header.append(f"  ! {row['warning']} warning", style="yellow")
         header.append(f"  · {row['info']} info", style="cyan")
+        if row.get("unsaved"):
+            header.append("  ± UNSAVED CONFIG - lost at reboot", style="bold dark_orange")
         if row.get("error"):
             header.append(f"  UNREACHABLE: {row['error']}", style="bold red")
         self.query_one("#dheader", Static).update(header)
@@ -307,6 +309,9 @@ class AuditUI(App):
     TITLE = "netauditor"
     CSS = """
     #statusbar { dock: top; height: 3; border: round $accent; padding: 0 1; }
+    #unsavedbar { dock: top; height: 1; padding: 0 1; background: darkorange;
+                  color: black; text-style: bold; display: none; }
+    #unsavedbar.visible { display: block; }
     #campustabs { dock: top; height: 2; }
     #hosts { height: 1fr; border: round $secondary; }
     #hostsearch { dock: bottom; display: none; height: 3; margin: 0 1; }
@@ -354,6 +359,7 @@ class AuditUI(App):
 
     def compose(self) -> ComposeResult:
         yield Static(id="statusbar")
+        yield Static(id="unsavedbar")
         names = [_UNGROUPED_LABEL if c == "" else c for c in campuses(self.rows)]
         yield Tabs(Tab("All", id="campus-all"),
                    *(Tab(n, id=f"campus-{i}") for i, n in enumerate(names)),
@@ -383,6 +389,7 @@ class AuditUI(App):
             table.add_column(label, key=key)
         self.last_drift = load_drift(self.outdir)
         self._populate_hosts()
+        self._update_unsaved_banner()
         self.set_interval(1.0, self._tick)
         self._update_status()
         table.focus()
@@ -456,6 +463,8 @@ class AuditUI(App):
             cell.append(f"!{r['warning']}", style="yellow")
         if not r["critical"] and not r["warning"]:
             cell.append("●", style="green")
+        if r.get("unsaved"):
+            cell.append(" ±", style="bold dark_orange")
         return cell
 
     def _probe_cells(self, r) -> "tuple[Text, Text]":
@@ -610,6 +619,18 @@ class AuditUI(App):
         except Exception:
             pass  # status bar not mounted (e.g. during shutdown)
 
+    def _update_unsaved_banner(self) -> None:
+        affected = [r["name"] for r in self.rows
+                    if r.get("unsaved") and not r.get("ghost")]
+        banner = self.query_one("#unsavedbar", Static)
+        if affected:
+            names = ", ".join(affected[:6]) + (", ..." if len(affected) > 6 else "")
+            banner.update(f"⚠ {len(affected)} switch(es) with UNSAVED config changes "
+                          f"(lost at reboot): {names}")
+            banner.add_class("visible")
+        else:
+            banner.remove_class("visible")
+
     def _update_detailstrip(self) -> None:
         row = self.current_row
         strip = self.query_one("#detailstrip", Static)
@@ -641,6 +662,8 @@ class AuditUI(App):
             text.append(f"✗ {row['critical']} critical", style="bold red")
             text.append(f"   ! {row['warning']} warning", style="yellow")
             text.append(f"   · {row['info']} info", style="cyan")
+            if row.get("unsaved"):
+                text.append("   ± UNSAVED CONFIG", style="bold dark_orange")
             top = {}
             for f in row["findings"]:
                 if f["severity"] in ("critical", "warning"):
@@ -907,4 +930,5 @@ class AuditUI(App):
         self.rows = build_rows(self.inv_hosts, audit)
         self.generated = (audit or {}).get("generated", self.generated)
         self._populate_hosts()
+        self._update_unsaved_banner()
         self._update_status()

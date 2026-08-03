@@ -71,6 +71,17 @@ class TestBuildRows(unittest.TestCase):
         rows = build_rows([], audit_fixture())
         self.assertFalse(any(r["ghost"] for r in rows))
 
+    def test_unsaved_flag(self):
+        audit = audit_fixture()
+        audit["hosts"][0]["findings"].append(
+            {"code": "UNSAVED_CHANGES", "severity": "warning", "message": "x"})
+        rows = build_rows([], audit)
+        by_name = {r["name"]: r for r in rows}
+        self.assertTrue(by_name["sw1"]["unsaved"])
+        self.assertFalse(by_name["sw2"]["unsaved"])
+        # aggregate inherits it (any member unsaved)
+        self.assertTrue(aggregate_row(rows)["unsaved"])
+
     def test_hosts_for_scope(self):
         from netauditor.ui_data import hosts_for_scope
         inv = [Host(host="10.1.0.1", group="sydenham"),

@@ -189,7 +189,8 @@ def cmd_status(args) -> int:
     for e in (load_audit(args.output) or {}).get("hosts", []):
         crit = sum(1 for f in e.get("findings", []) if f["severity"] == "critical")
         warn = sum(1 for f in e.get("findings", []) if f["severity"] == "warning")
-        entry = (crit, warn, bool(e.get("error")))
+        unsaved = any(f.get("code") == "UNSAVED_CHANGES" for f in e.get("findings", []))
+        entry = (crit, warn, bool(e.get("error")), unsaved)
         for key in (e.get("host"), (e.get("name") or "").lower()):
             if key:
                 flags[key] = entry
@@ -214,6 +215,8 @@ def cmd_status(args) -> int:
             audit = "clean"
         else:
             audit = f"crit {flag[0]}  warn {flag[1]}"
+        if flag is not None and len(flag) > 3 and flag[3]:
+            audit += "  UNSAVED-CONFIG"
         print(f"{state:<5} {h.display_name():<26} {h.host:<16} "
               f"{(h.group or ''):<12} {latency:>7}   {audit}")
     print(f"\n{len(hosts) - down}/{len(hosts)} up, {down} down")

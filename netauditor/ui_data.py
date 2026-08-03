@@ -49,6 +49,7 @@ def _row(name, host, group, inv=None, entry=None):
         "group": group,
         "ghost": False,
         "audited_at": (entry or {}).get("audited_at", ""),
+        "unsaved": any(f.get("code") == "UNSAVED_CHANGES" for f in findings),
         "critical": counts["critical"],
         "warning": counts["warning"],
         "info": counts["info"],

@@ -117,6 +117,12 @@ passwords in the file; if you must inline them, keep the inventory out of git
 netauditor audit -i inventory.yml -o out
 ```
 
+Unsaved config changes get loud treatment everywhere: an amber banner at the
+top of `audit.html` and the UI naming the affected switches, a `±` marker on
+those switches in every table, and an `UNSAVED-CONFIG` tag in `status` output -
+because "the switch reboots and the fix vanishes" is the most common way fleet
+work silently unravels.
+
 Scoped runs (`-g <campus>`, or a campus tab / single switch in the UI) **merge**
 into the existing `audit.json`: audited entries are replaced, everything else
 is kept, and each entry carries its own `audited_at` timestamp so mixed-age
