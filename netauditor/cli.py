@@ -12,6 +12,29 @@ from .runner import (_group_filename, _split_by_group, prune_audit, run_analyze,
                      run_audit)
 
 
+_INVENTORY_CANDIDATES = ("inventory.yml", "inventory.yaml", "inventory.txt")
+
+
+def _find_inventory(directory=".") -> str:
+    """First inventory file found in a directory, or ''."""
+    for name in _INVENTORY_CANDIDATES:
+        p = Path(directory) / name
+        if p.is_file():
+            return str(p)
+    return ""
+
+
+def _resolve_inventory(path: str) -> "tuple[str, str]":
+    """Resolve an explicit or auto-detected inventory path. Returns (path, error)."""
+    if path:
+        return path, ""
+    found = _find_inventory()
+    if found:
+        return found, ""
+    return "", ("no inventory given and none found in the current directory "
+                f"(looked for {', '.join(_INVENTORY_CANDIDATES)})")
+
+
 def _parse_formats(value: str) -> "list[str]":
     formats = [f.strip().lower() for f in value.split(",") if f.strip()]
     bad = [f for f in formats if f not in ("json", "html")]
@@ -39,8 +62,12 @@ def _filter_by_group(items, group_of, requested: str):
 
 
 def cmd_audit(args) -> int:
+    inventory, err = _resolve_inventory(args.inventory)
+    if err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
     try:
-        hosts = load_inventory(args.inventory, prompt_missing=not args.no_prompt)
+        hosts = load_inventory(inventory, prompt_missing=not args.no_prompt)
     except InventoryError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -107,8 +134,12 @@ def cmd_analyze(args) -> int:
 
 
 def cmd_prune(args) -> int:
+    inventory, err = _resolve_inventory(args.inventory)
+    if err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
     try:
-        hosts = load_inventory(args.inventory, prompt_missing=False,
+        hosts = load_inventory(inventory, prompt_missing=False,
                                require_credentials=False)
     except InventoryError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -135,8 +166,12 @@ def cmd_prune(args) -> int:
 
 
 def cmd_status(args) -> int:
+    inventory, err = _resolve_inventory(args.inventory)
+    if err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
     try:
-        hosts = load_inventory(args.inventory, prompt_missing=False,
+        hosts = load_inventory(inventory, prompt_missing=False,
                                require_credentials=False)
     except InventoryError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -186,8 +221,12 @@ def cmd_status(args) -> int:
 
 
 def cmd_connect(args) -> int:
+    inventory, err = _resolve_inventory(args.inventory)
+    if err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
     try:
-        hosts = load_inventory(args.inventory, prompt_missing=not args.no_prompt)
+        hosts = load_inventory(inventory, prompt_missing=not args.no_prompt)
     except InventoryError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -209,10 +248,11 @@ def cmd_connect(args) -> int:
 
 
 def cmd_ui(args) -> int:
+    inventory = args.inventory or _find_inventory()
     hosts = []
-    if args.inventory:
+    if inventory:
         try:
-            hosts = load_inventory(args.inventory, prompt_missing=not args.no_prompt,
+            hosts = load_inventory(inventory, prompt_missing=not args.no_prompt,
                                    require_credentials=False)
         except InventoryError as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -232,6 +272,15 @@ def cmd_ui(args) -> int:
     if not hosts and audit is None:
         print("error: nothing to show - pass -i <inventory> and/or -o <dir with audit.json>",
               file=sys.stderr)
+        print(f"tip: drop an {_INVENTORY_CANDIDATES[0]} next to the executable "
+              "(see examples/inventory.yml) and it is picked up automatically.",
+              file=sys.stderr)
+        if getattr(args, "implicit", False) and sys.stdin.isatty():
+            # bare double-click launch: keep the console window readable
+            try:
+                input("Press Enter to close... ")
+            except (EOFError, KeyboardInterrupt):
+                pass
         return 2
 
     try:
@@ -249,14 +298,23 @@ def cmd_ui(args) -> int:
 
 
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:]) if argv is None else list(argv)
+    implicit = not argv
+    if implicit:
+        argv = ["ui"]  # bare launch (e.g. double-clicked exe) pops the dashboard
+
     parser = argparse.ArgumentParser(
         prog="netauditor",
-        description="SSH switch auditor: port/STP health checks, config export, drift analysis.")
+        description="SSH switch auditor: port/STP health checks, config export, drift "
+                    "analysis. Run without arguments to open the dashboard "
+                    "(inventory.yml auto-detected from the working directory).")
     parser.add_argument("--version", action="version", version=f"netauditor {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_audit = sub.add_parser("audit", help="SSH to every switch, run checks, export reports")
-    p_audit.add_argument("-i", "--inventory", required=True, help="inventory file (YAML or plain text)")
+    p_audit.add_argument("-i", "--inventory", default="",
+                         help="inventory file (default: auto-detect "
+                              "inventory.yml/.yaml/.txt in the current directory)")
     p_audit.add_argument("-o", "--output", default="out", help="output directory (default: out)")
     p_audit.add_argument("--formats", type=_parse_formats, default=["json", "html"],
                          help="comma-separated: json,html (default: both)")
@@ -274,8 +332,8 @@ def main(argv=None) -> int:
 
     p_prune = sub.add_parser("prune", help="remove audit entries for switches that are "
                                            "no longer in the inventory")
-    p_prune.add_argument("-i", "--inventory", required=True,
-                         help="inventory file (the source of truth)")
+    p_prune.add_argument("-i", "--inventory", default="",
+                         help="inventory file, the source of truth (default: auto-detect)")
     p_prune.add_argument("-o", "--output", default="out",
                          help="audit output dir (default: out)")
     p_prune.add_argument("--formats", type=_parse_formats, default=["json", "html"],
@@ -303,8 +361,8 @@ def main(argv=None) -> int:
 
     p_status = sub.add_parser("status", help="quick reachability sweep "
                                              "(TCP connect to each switch's SSH port)")
-    p_status.add_argument("-i", "--inventory", required=True,
-                          help="inventory file (YAML or plain text)")
+    p_status.add_argument("-i", "--inventory", default="",
+                          help="inventory file (default: auto-detect)")
     p_status.add_argument("-g", "--group", default="",
                           help="probe only these groups/campuses, comma-separated")
     p_status.add_argument("-o", "--output", default="out",
@@ -317,8 +375,8 @@ def main(argv=None) -> int:
                             help="open a live SSH session to a switch using inventory credentials")
     p_conn.add_argument("target", nargs="?", default="",
                         help="switch name or IP (substring is fine); omit to pick from a list")
-    p_conn.add_argument("-i", "--inventory", required=True,
-                        help="inventory file (YAML or plain text)")
+    p_conn.add_argument("-i", "--inventory", default="",
+                        help="inventory file (default: auto-detect)")
     p_conn.add_argument("-g", "--group", default="",
                         help="limit the candidates to these groups/campuses, comma-separated")
     p_conn.add_argument("--no-prompt", action="store_true",
@@ -327,7 +385,7 @@ def main(argv=None) -> int:
 
     p_ui = sub.add_parser("ui", help="interactive terminal dashboard: audit browser + SSH")
     p_ui.add_argument("-i", "--inventory", default="",
-                      help="inventory file (enables the SSH action)")
+                      help="inventory file, enables audits/SSH (default: auto-detect)")
     p_ui.add_argument("-o", "--output", default="out",
                       help="audit output dir (or audit.json) to browse (default: out)")
     p_ui.add_argument("-g", "--group", default="",
@@ -339,6 +397,7 @@ def main(argv=None) -> int:
     p_ui.set_defaults(func=cmd_ui)
 
     args = parser.parse_args(argv)
+    args.implicit = implicit
     if getattr(args, "tests", None) is not None and isinstance(args.tests, str):
         args.tests = [t.strip() for t in args.tests.split(",") if t.strip()]
     return args.func(args)

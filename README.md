@@ -6,6 +6,35 @@ problems (PortFast on uplinks, BPDU guard gaps, STP churn, err-disabled ports,
 duplex mismatches), exports each running config, and can then compare configs
 across switches to detect drift.
 
+## Quick start
+
+Put a filled-in `inventory.yml` in a folder (copy
+[examples/inventory.yml](examples/inventory.yml)) and run the tool from that
+folder with no arguments:
+
+```
+netauditor
+```
+
+That pops the terminal command center with the inventory auto-loaded - live
+reachability starts immediately, press `a` to run the first audit. The same
+works for the standalone exe: put `netauditor.exe` and `inventory.yml` in one
+folder and double-click the exe.
+
+Every subcommand auto-detects `inventory.yml` / `inventory.yaml` /
+`inventory.txt` in the current directory, so day-to-day none of them need
+`-i`:
+
+```
+netauditor status          # is everything up?
+netauditor audit           # full audit -> out/
+netauditor analyze out     # config drift
+netauditor connect sw-lib  # SSH into a switch
+netauditor ui              # command center (same as bare "netauditor")
+```
+
+`-i <file>` still overrides the auto-detection everywhere.
+
 ## Install
 
 ```
@@ -221,8 +250,11 @@ answers.
 ## 5. Command center (terminal UI)
 
 ```
-netauditor ui -i inventory.yml -o out
+netauditor
 ```
+
+(bare invocation defaults to `ui`; the explicit form is
+`netauditor ui [-i inventory.yml] [-o out]`)
 
 An interactive terminal command center (built on
 [Textual](https://github.com/Textualize/textual)), laid out like a dense
@@ -258,9 +290,17 @@ you get the results browser and drift checks.
 
 ## Typical workflow
 
+From the folder containing `inventory.yml` - interactive:
+
 ```
-netauditor audit -i inventory.yml -o out
-netauditor analyze out -o out --tests all
+netauditor
+```
+
+or scripted (reports land in `out\`):
+
+```
+netauditor audit
+netauditor analyze out --tests all
 start out\audit.html
 ```
 
@@ -293,18 +333,14 @@ attached automatically by CI whenever a `v*` tag is pushed:
 powershell -ExecutionPolicy Bypass -File packaging\build-exe.ps1
 ```
 
-Either way you get `netauditor.exe` (~15 MB, no Python required). It is a
-command-line tool - double-clicking the exe alone just flashes a console. For
-non-terminal users, releases also include `run-audit.bat` and the inventory
-template: put all three files in one folder, fill in `inventory.yml`, and
-double-click `run-audit.bat` - it audits, analyzes, and opens the HTML report. Share the exe
-together with an inventory file (start from [examples/inventory.yml](examples/inventory.yml));
-the recipient runs:
-
-```
-netauditor.exe audit -i inventory.yml -o out
-netauditor.exe analyze out -o out --tests all
-```
+Either way you get `netauditor.exe` (~20 MB, no Python required). The
+recipient experience is two files in one folder: the exe plus a filled-in
+`inventory.yml` (start from [examples/inventory.yml](examples/inventory.yml)).
+**Double-clicking the exe opens the command center** with the inventory
+auto-loaded; terminal users get the same subcommands as the pip install
+(`netauditor.exe status`, `netauditor.exe audit`, ...). Releases also include
+`run-audit.bat` for the non-interactive path: it audits, analyzes, and opens
+the HTML report without anyone touching the dashboard.
 
 Notes: the exe is Windows-only (build on the OS you target); unsigned exes may
 trigger a SmartScreen "unrecognized app" prompt on first run - "More info" >

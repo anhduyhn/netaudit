@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -92,6 +93,46 @@ class TestPruneCommand(unittest.TestCase):
         self.assertEqual(rc, 0)
         data = json.loads((self.out / "audit.json").read_text(encoding="utf-8"))
         self.assertEqual([h["name"] for h in data["hosts"]], ["sw1"])
+
+
+class TestImplicitStartup(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.old_cwd = os.getcwd()
+        os.chdir(self.tmp)
+
+    def tearDown(self):
+        os.chdir(self.old_cwd)
+
+    def test_find_inventory_prefers_yml(self):
+        (self.tmp / "inventory.txt").write_text("10.0.0.1\n", encoding="utf-8")
+        (self.tmp / "inventory.yml").write_text("hosts:\n  - host: 10.0.0.1\n",
+                                               encoding="utf-8")
+        self.assertEqual(cli._find_inventory(self.tmp), str(self.tmp / "inventory.yml"))
+
+    def test_find_inventory_empty_dir(self):
+        self.assertEqual(cli._find_inventory(self.tmp), "")
+
+    def test_resolve_explicit_wins(self):
+        path, err = cli._resolve_inventory("explicit.yml")
+        self.assertEqual(path, "explicit.yml")
+        self.assertEqual(err, "")
+
+    def test_resolve_errors_when_nothing_found(self):
+        path, err = cli._resolve_inventory("")
+        self.assertEqual(path, "")
+        self.assertIn("inventory.yml", err)
+
+    def test_bare_launch_without_anything_errors_cleanly(self):
+        # no inventory, no out/audit.json, non-tty stdin: no UI, no hang
+        rc = cli.main([])
+        self.assertEqual(rc, 2)
+
+    def test_status_autodetects_inventory(self):
+        (self.tmp / "inventory.yml").write_text(
+            "hosts:\n  - host: 127.0.0.1\n    port: 1\n", encoding="utf-8")
+        rc = cli.main(["status", "--timeout", "1"])
+        self.assertEqual(rc, 1)  # found the inventory, probed, port 1 is down
 
 
 if __name__ == "__main__":
