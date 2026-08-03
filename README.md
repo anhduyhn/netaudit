@@ -200,19 +200,26 @@ netauditor ui -i inventory.yml -o out
 ```
 
 An interactive terminal command center (built on
-[Textual](https://github.com/Textualize/textual)): switch list with per-host
-critical/warning counts on the left (an `= ALL SWITCHES =` row aggregates the
-whole fleet), and tabs for findings, interfaces, config, drift, and a job log
-on the right.
+[Textual](https://github.com/Textualize/textual)), laid out like a dense
+ratatui-style dashboard: a status bar (switch count, colored ●/✗/! state
+summary, clock, last-audit time or live job progress), a campus tab strip, one
+full-width switch table with campus section headers and a fleet aggregate row,
+a slim detail strip for the selected switch, and a pipe-separated key-hint bar.
+Unreachable switches show as red rows; Enter drills into a full-screen detail
+view (findings / interfaces / config) and Esc comes back.
 
 Keys:
 
 | Key | Action |
 |-----|--------|
-| `a` | Run a full audit of the loaded inventory (progress streams to the Log tab; the host list and findings refresh when it finishes). Prompts for credentials in-app if the inventory has none. |
-| `d` | Run the drift check + all test suites over the latest audit; results land in the Drift tab. |
-| `s` | Drop into a live SSH session on the selected switch; ending it returns to the dashboard. |
-| `f` / `/` | Cycle severity filter / free-text finding filter. |
+| `↑↓` / `←→` | Navigate switches / switch campus tab. |
+| `Enter` | Drill into the selected switch (or aggregate row) - findings, interfaces, config. |
+| `a` | Run a full audit of the loaded inventory (live log screen; table refreshes when done). Prompts for credentials in-app if the inventory has none. |
+| `d` | Run the drift check + all test suites; results open in a drift screen. |
+| `s` | Live SSH session on the selected switch; ending it returns to the dashboard. |
+| `/` | Find switches by name/IP (Esc clears). In the detail screen: filter findings. |
+| `f` | (detail screen) cycle the severity filter. |
+| `l` | Show the job log. |
 | `r` | Reload results from disk (e.g. after a CLI run). |
 | `q` | Quit. |
 

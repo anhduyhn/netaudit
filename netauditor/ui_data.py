@@ -63,8 +63,8 @@ def build_rows(inv_hosts, audit) -> "list[dict]":
     """Merge inventory hosts with audit entries into display rows.
 
     Inventory rows adopt matching audit data (matched by IP, then by name);
-    audit-only entries are appended; an aggregate ALL row is prepended when
-    any findings exist.
+    audit-only entries are appended. Aggregate rows are built separately with
+    aggregate_row().
     """
     audit_hosts = (audit or {}).get("hosts", [])
     by_ip = {a.get("host"): a for a in audit_hosts}
@@ -80,17 +80,33 @@ def build_rows(inv_hosts, audit) -> "list[dict]":
         if id(a) not in matched:
             rows.append(_row(a.get("name") or a.get("host"), a.get("host"),
                              a.get("group", ""), entry=a))
-
-    all_findings = [f for r in rows for f in r["findings"]]
-    if all_findings:
-        combined = {
-            "findings": all_findings,
-            "interfaces": [],
-            "config": "",
-            "facts": {},
-        }
-        rows.insert(0, _row(ALL_ROW_NAME, "", "", entry=combined))
     return rows
+
+
+def aggregate_row(rows, name=ALL_ROW_NAME) -> dict:
+    """Combine a set of host rows into one aggregate row (fleet or campus scope)."""
+    combined = {
+        "findings": [f for r in rows for f in r["findings"]],
+        "interfaces": [],
+        "config": "",
+        "facts": {},
+    }
+    agg = _row(name, "", "", entry=combined)
+    agg["is_aggregate"] = True
+    agg["member_count"] = len(rows)
+    return agg
+
+
+def campuses(rows) -> "list[str]":
+    """Distinct group names in first-seen order; ungrouped hosts sort last as ''."""
+    seen = []
+    for r in rows:
+        g = r.get("group") or ""
+        if g and g not in seen:
+            seen.append(g)
+    if any(not (r.get("group") or "") for r in rows):
+        seen.append("")
+    return seen
 
 
 def filter_findings(findings, severity="all", query="") -> "list[dict]":

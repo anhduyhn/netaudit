@@ -1,7 +1,8 @@
 import unittest
 
 from netauditor.inventory import Host
-from netauditor.ui_data import ALL_ROW_NAME, build_rows, filter_findings
+from netauditor.ui_data import (ALL_ROW_NAME, aggregate_row, build_rows,
+                                campuses, filter_findings)
 
 
 def audit_fixture():
@@ -34,15 +35,28 @@ class TestBuildRows(unittest.TestCase):
         self.assertIn("sw1", names)
         self.assertIn("sw2", names)
 
-    def test_all_row_prepended_and_aggregates(self):
+    def test_no_aggregate_in_plain_rows(self):
         rows = build_rows([], audit_fixture())
-        self.assertEqual(rows[0]["name"], ALL_ROW_NAME)
-        self.assertEqual(rows[0]["critical"], 1)
-        self.assertEqual(rows[0]["warning"], 1)
-        # aggregated findings carry their origin host
-        self.assertEqual(rows[0]["findings"][0]["host"], "sw1")
+        self.assertNotIn(ALL_ROW_NAME, [r["name"] for r in rows])
+        self.assertEqual(len(rows), 2)
 
-    def test_no_findings_no_all_row(self):
+    def test_aggregate_row_combines_findings(self):
+        rows = build_rows([], audit_fixture())
+        agg = aggregate_row(rows)
+        self.assertEqual(agg["name"], ALL_ROW_NAME)
+        self.assertTrue(agg["is_aggregate"])
+        self.assertEqual(agg["member_count"], 2)
+        self.assertEqual(agg["critical"], 1)
+        self.assertEqual(agg["warning"], 1)
+        # aggregated findings carry their origin host
+        self.assertEqual(agg["findings"][0]["host"], "sw1")
+
+    def test_campuses_order_and_ungrouped(self):
+        rows = build_rows([Host(host="10.9.9.9", username="u", password="p")],
+                          audit_fixture())
+        self.assertEqual(campuses(rows), ["sydenham", "delahey", ""])
+
+    def test_inventory_only(self):
         rows = build_rows([Host(host="10.9.9.9", username="u", password="p")], None)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["host"], "10.9.9.9")

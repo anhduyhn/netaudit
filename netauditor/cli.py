@@ -162,7 +162,8 @@ def cmd_ui(args) -> int:
         return 2
     out = Path(args.output)
     outdir = out if out.is_dir() or not out.suffix else out.parent
-    AuditUI(build_rows(hosts, audit), inv_hosts=hosts, outdir=outdir).run()
+    AuditUI(build_rows(hosts, audit), inv_hosts=hosts, outdir=outdir,
+            generated=(audit or {}).get("generated", "")).run()
     return 0
 
 
