@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netauditor"
-version = "0.1.2"
+version = "0.2.0"
 description = "SSH-based switch auditor: port/STP health checks, config export, and cross-switch config drift analysis"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "netmiko>=4.3",
     "PyYAML>=6.0",
+    "textual>=1.0",
 ]
 
 [project.scripts]

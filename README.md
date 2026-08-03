@@ -193,6 +193,22 @@ target at all) you get a numbered list to pick from. Type `exit` on the switch
 to end the session. Ctrl+C is passed through to the switch, and arrow keys /
 history work as normal. Host keys are auto-accepted, same policy as the audit.
 
+## 4. Dashboard (terminal UI)
+
+```
+netauditor ui -i inventory.yml -o out
+```
+
+An interactive terminal dashboard (built on [Textual](https://github.com/Textualize/textual))
+over the latest audit: switch list with per-host critical/warning counts on the
+left (an `= ALL SWITCHES =` row aggregates the whole fleet), and tabs for
+findings, interfaces, and the collected config on the right. Keys: `f` cycles
+the severity filter, `/` focuses the free-text finding filter, `s` drops into
+a live SSH session to the selected switch (using inventory credentials) and
+returns to the dashboard when the session ends, `q` quits. `-g` scopes it to a
+campus. Both `-i` and `-o` are optional - with only an inventory you get the
+host list and SSH; with only audit output you get the results browser.
+
 ## Typical workflow
 
 ```

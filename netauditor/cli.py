@@ -214,6 +214,42 @@ def cmd_connect(args) -> int:
     return connect.open_session(chosen)
 
 
+def cmd_ui(args) -> int:
+    hosts = []
+    if args.inventory:
+        try:
+            hosts = load_inventory(args.inventory, prompt_missing=not args.no_prompt,
+                                   require_credentials=False)
+        except InventoryError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        hosts, err = _filter_by_group(hosts, lambda h: h.group, args.group)
+        if err:
+            print(f"error: {err}", file=sys.stderr)
+            return 2
+
+    from .ui_data import build_rows, load_audit
+
+    audit = load_audit(args.output)
+    if audit and args.group:
+        wanted = {g.strip().lower() for g in args.group.split(",") if g.strip()}
+        audit = dict(audit, hosts=[h for h in audit.get("hosts", [])
+                                   if (h.get("group") or "").lower() in wanted])
+    if not hosts and audit is None:
+        print("error: nothing to show - pass -i <inventory> and/or -o <dir with audit.json>",
+              file=sys.stderr)
+        return 2
+
+    try:
+        from .ui import AuditUI
+    except ImportError as exc:
+        print(f"error: the dashboard needs the 'textual' package (pip install textual): {exc}",
+              file=sys.stderr)
+        return 2
+    AuditUI(build_rows(hosts, audit)).run()
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="netauditor",
@@ -263,6 +299,17 @@ def main(argv=None) -> int:
     p_conn.add_argument("--no-prompt", action="store_true",
                         help="never prompt for credentials (fail instead)")
     p_conn.set_defaults(func=cmd_connect)
+
+    p_ui = sub.add_parser("ui", help="interactive terminal dashboard: audit browser + SSH")
+    p_ui.add_argument("-i", "--inventory", default="",
+                      help="inventory file (enables the SSH action)")
+    p_ui.add_argument("-o", "--output", default="out",
+                      help="audit output dir (or audit.json) to browse (default: out)")
+    p_ui.add_argument("-g", "--group", default="",
+                      help="show only these groups/campuses, comma-separated")
+    p_ui.add_argument("--no-prompt", action="store_true",
+                      help="never prompt for credentials (SSH action may be unavailable)")
+    p_ui.set_defaults(func=cmd_ui)
 
     args = parser.parse_args(argv)
     if getattr(args, "tests", None) is not None and isinstance(args.tests, str):

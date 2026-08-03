@@ -9,7 +9,10 @@ if (-not (Test-Path ".venv")) { python -m venv .venv }
 & .venv\Scripts\python -m pip install --quiet --upgrade pip
 & .venv\Scripts\python -m pip install --quiet . pyinstaller
 
+# --collect-all textual: textual lazy-loads its widget modules, which static
+# import analysis misses.
 & .venv\Scripts\pyinstaller --onefile --console --clean --noconfirm `
+    --collect-all textual `
     --name netauditor packaging\entry.py
 
 Write-Host "`nBuilt: dist\netauditor.exe"

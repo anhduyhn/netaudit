@@ -42,8 +42,14 @@ class Host:
         return self.name or self.host
 
 
-def load_inventory(path, prompt_missing: bool = True) -> "list[Host]":
-    """Load an inventory file and return fully-credentialed Host objects."""
+def load_inventory(path, prompt_missing: bool = True,
+                   require_credentials: bool = True) -> "list[Host]":
+    """Load an inventory file and return Host objects.
+
+    With require_credentials (the default) every host must end up with a
+    username and password; the UI passes False since credentials are only
+    needed when an SSH session is actually opened.
+    """
     path = Path(path)
     if not path.exists():
         raise InventoryError(f"inventory file not found: {path}")
@@ -56,12 +62,13 @@ def load_inventory(path, prompt_missing: bool = True) -> "list[Host]":
     _apply_env(hosts)
     if prompt_missing:
         _prompt_missing(hosts)
-    missing = [h.host for h in hosts if not h.username or not h.password]
-    if missing:
-        raise InventoryError(
-            "no credentials for: %s (set inventory defaults, inline creds, or %s/%s)"
-            % (", ".join(missing), ENV_USERNAME, ENV_PASSWORD)
-        )
+    if require_credentials:
+        missing = [h.host for h in hosts if not h.username or not h.password]
+        if missing:
+            raise InventoryError(
+                "no credentials for: %s (set inventory defaults, inline creds, or %s/%s)"
+                % (", ".join(missing), ENV_USERNAME, ENV_PASSWORD)
+            )
     return hosts
 
 
