@@ -71,6 +71,16 @@ class TestBuildRows(unittest.TestCase):
         rows = build_rows([], audit_fixture())
         self.assertFalse(any(r["ghost"] for r in rows))
 
+    def test_nameless_inventory_host_adopts_audit_hostname(self):
+        inv = [Host(host="10.0.0.1", username="u", password="p")]  # no name:
+        rows = build_rows(inv, audit_fixture())
+        self.assertEqual(rows[0]["name"], "sw1")  # hostname learned by the audit
+        self.assertIsNotNone(rows[0]["inv"])
+        # explicit inventory name still wins over the audit name
+        inv = [Host(host="10.0.0.1", name="my-label", username="u", password="p")]
+        rows = build_rows(inv, audit_fixture())
+        self.assertEqual(rows[0]["name"], "my-label")
+
     def test_unsaved_flag(self):
         audit = audit_fixture()
         audit["hosts"][0]["findings"].append(

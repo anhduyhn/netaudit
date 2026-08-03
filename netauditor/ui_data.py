@@ -78,7 +78,10 @@ def build_rows(inv_hosts, audit) -> "list[dict]":
         entry = by_ip.get(h.host) or by_name.get(h.display_name().lower())
         if entry is not None:
             matched.add(id(entry))
-        rows.append(_row(h.display_name(), h.host, h.group, inv=h, entry=entry))
+        # inventory name wins; otherwise use the hostname the audit learned
+        # from the switch prompt, falling back to the bare IP
+        name = h.name or (entry or {}).get("name") or h.host
+        rows.append(_row(name, h.host, h.group, inv=h, entry=entry))
     for a in audit_hosts:
         if id(a) not in matched:
             row = _row(a.get("name") or a.get("host"), a.get("host"),

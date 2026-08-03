@@ -186,11 +186,14 @@ def cmd_status(args) -> int:
 
     # audit flags column (best effort - fine if no audit exists yet)
     flags = {}
+    audit_names = {}
     for e in (load_audit(args.output) or {}).get("hosts", []):
         crit = sum(1 for f in e.get("findings", []) if f["severity"] == "critical")
         warn = sum(1 for f in e.get("findings", []) if f["severity"] == "warning")
         unsaved = any(f.get("code") == "UNSAVED_CHANGES" for f in e.get("findings", []))
         entry = (crit, warn, bool(e.get("error")), unsaved)
+        if e.get("host") and e.get("name"):
+            audit_names[e["host"]] = e["name"]
         for key in (e.get("host"), (e.get("name") or "").lower()):
             if key:
                 flags[key] = entry
@@ -217,7 +220,8 @@ def cmd_status(args) -> int:
             audit = f"crit {flag[0]}  warn {flag[1]}"
         if flag is not None and len(flag) > 3 and flag[3]:
             audit += "  UNSAVED-CONFIG"
-        print(f"{state:<5} {h.display_name():<26} {h.host:<16} "
+        display = h.name or audit_names.get(h.host) or h.host
+        print(f"{state:<5} {display:<26} {h.host:<16} "
               f"{(h.group or ''):<12} {latency:>7}   {audit}")
     print(f"\n{len(hosts) - down}/{len(hosts)} up, {down} down")
     return 1 if down else 0
