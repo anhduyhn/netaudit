@@ -48,7 +48,7 @@ jobs:
         run: >
           gh release create ${{ github.ref_name }}
           dist/netauditor.exe
-          packaging/run-audit.bat
+          packaging/run-full-audit-and-open-report.bat
           examples/inventory.yml
           --title "netauditor ${{ github.ref_name }}"
           --generate-notes

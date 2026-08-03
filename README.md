@@ -379,8 +379,8 @@ recipient experience is two files in one folder: the exe plus a filled-in
 **Double-clicking the exe opens the command center** with the inventory
 auto-loaded; terminal users get the same subcommands as the pip install
 (`netauditor.exe status`, `netauditor.exe audit`, ...). Releases also include
-`run-audit.bat` for the non-interactive path: it audits, analyzes, and opens
-the HTML report without anyone touching the dashboard.
+`run-full-audit-and-open-report.bat` for people who want no dashboard at all:
+double-clicking it audits, analyzes, and opens the HTML report, then stops.
 
 Notes: the exe is Windows-only (build on the OS you target); unsigned exes may
 trigger a SmartScreen "unrecognized app" prompt on first run - "More info" >

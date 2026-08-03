@@ -1,8 +1,12 @@
 @echo off
-REM One-click switch audit.
+REM One-click, non-interactive audit: audit -> drift analysis -> open the
+REM HTML report. Use this when you just want the report.
+REM
+REM (Double-clicking netauditor.exe itself opens the interactive dashboard
+REM instead - same tool, different entry point.)
+REM
 REM Put this file, netauditor.exe and your filled-in inventory.yml in the
-REM same folder, then double-click it. Results open in your browser and are
-REM saved to the "out" folder.
+REM same folder, then double-click it. Results are saved to the "out" folder.
 cd /d "%~dp0"
 
 if not exist netauditor.exe (
