@@ -312,6 +312,7 @@ Keys:
 | `a` | Audit the current scope: the whole inventory on the All tab, one campus on a campus tab. Results merge into the existing audit. Prompts for credentials in-app if the inventory has none. |
 | `d` | Run the drift check + all test suites; results open in a drift screen. |
 | `c` | Changes since the previous audit snapshot: what got fixed, what is new. |
+| `g` | Re-render every HTML report (combined and per-campus) from the stored audit data - no switches contacted. Same as `netauditor report`. |
 | `p` | Prune stale entries (switches no longer in the inventory, shown dim with `?`) after a confirmation listing them. |
 | `w` | Toggle watch mode (on by default with an inventory): TCP-probes every switch on an interval (`--interval`, default 15s). `St` shows live up/down, `ms`/`Seen` columns update, and the status bar shows `live ↑N ↓N | next scan Ns`. Audit flags stay in their own column. |
 | `s` | Live SSH session on the selected switch; ending it returns to the dashboard. |

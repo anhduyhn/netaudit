@@ -404,6 +404,7 @@ class AuditUI(App):
         Binding("r", "reload", "reload", show=False),
         Binding("p", "prune", "prune", show=False),
         Binding("c", "changes", "changes", show=False),
+        Binding("g", "generate_reports", "generate reports", show=False),
         Binding("w", "toggle_watch", "watch", show=False),
         Binding("slash", "find", "find", show=False),
         Binding("escape", "clear_find", show=False),
@@ -445,9 +446,9 @@ class AuditUI(App):
         yield Static(id="detailstrip")
         yield Static(_hints([("↑↓", "nav"), ("←→", "campus"), ("⏎", "detail"),
                              ("a", "audit scope"), ("d", "drift"), ("c", "changes"),
-                             ("s", "ssh"), ("w", "watch"), ("l", "log"),
-                             ("/", "find"), ("p", "prune"), ("r", "reload"),
-                             ("q", "quit")]),
+                             ("g", "reports"), ("s", "ssh"), ("w", "watch"),
+                             ("l", "log"), ("/", "find"), ("p", "prune"),
+                             ("r", "reload"), ("q", "quit")]),
                      id="hintbar")
 
     def on_mount(self) -> None:
@@ -778,6 +779,27 @@ class AuditUI(App):
 
     def action_show_log(self) -> None:
         self.push_screen(LogScreen())
+
+    def action_generate_reports(self) -> None:
+        """Re-render every HTML report from the stored audit data (no SSH)."""
+        if self._busy:
+            self.notify("A job is already running - press l for the log.",
+                        severity="warning")
+            return
+        from .runner import regenerate_reports
+        try:
+            messages = regenerate_reports(self.outdir)
+        except FileNotFoundError:
+            self.notify("No audit.json yet - run an audit first (a).",
+                        severity="warning")
+            return
+        except Exception as exc:
+            self.notify(f"Report generation failed: {exc}", severity="error")
+            return
+        for line in messages:
+            self._log(line)
+        written = sum(1 for m in messages if m.startswith("Wrote"))
+        self.notify(f"Regenerated {written} report file(s) in {self.outdir}.")
 
     def action_changes(self) -> None:
         from .history import (_stamp_from, diff_audits, load_snapshot,
