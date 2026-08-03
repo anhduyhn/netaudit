@@ -20,14 +20,24 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install package and PyInstaller
-        run: python -m pip install . pyinstaller
+      - name: Install dependencies and PyInstaller
+        run: python -m pip install -r requirements.txt pyinstaller
 
       - name: Run tests
         run: python -m unittest discover -s tests
 
+      - name: Check the tag matches the source version
+        shell: pwsh
+        run: |
+          $src = Get-Content netauditor/__init__.py -Raw
+          if ($src -notmatch '__version__\s*=\s*"([^"]+)"') { throw "no __version__" }
+          $version = $Matches[1]
+          $tag = "${{ github.ref_name }}" -replace '^v', ''
+          if ($version -ne $tag) { throw "tag $tag does not match source version $version" }
+          Write-Host "version $version matches tag"
+
       - name: Build exe
-        run: pyinstaller --onefile --console --clean --noconfirm --collect-all textual --name netauditor packaging/entry.py
+        run: pyinstaller --onefile --console --clean --noconfirm --paths . --collect-all textual --name netauditor packaging/entry.py
 
       - name: Smoke-test exe
         run: dist\netauditor.exe --version
