@@ -45,6 +45,8 @@ SNIPPETS = {
     "NO_NTP": _global("ntp server <ntp-ip>"),
     "NO_LOGGING_HOST": _global("logging host <syslog-ip>"),
     "SSH_V1": _global("ip ssh version 2"),
+    "SSH_DISABLED": _global("crypto key generate rsa modulus 2048\nip ssh version 2\n"
+                            "line vty 0 15\n transport input ssh"),
     "NO_EXEC_TIMEOUT": _global("line con 0\n exec-timeout 15 0\nline vty 0 15\n"
                                " exec-timeout 15 0"),
     "VTY_NO_ACL": _global("ip access-list standard MGMT-ACCESS\n"

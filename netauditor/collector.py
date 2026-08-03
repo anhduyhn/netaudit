@@ -12,6 +12,7 @@ COMMANDS = {
     "stp_detail": "show spanning-tree detail",
     "cdp_neighbors": "show cdp neighbors detail",
     "vtp_status": "show vtp status",
+    "ip_ssh": "show ip ssh",
     "logging": "show logging",
     "running_config": "show running-config",
     "startup_config": "show startup-config",

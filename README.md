@@ -138,8 +138,13 @@ netauditor prune -i inventory.yml -o out --yes    # remove and regenerate report
 Connects to every switch in parallel and runs:
 `show version`, `show interfaces status`, `show interfaces`,
 `show spanning-tree summary`, `show spanning-tree detail`,
-`show cdp neighbors detail`, `show vtp status`, `show logging`,
+`show cdp neighbors detail`, `show vtp status`, `show ip ssh`, `show logging`,
 `show running-config`, `show startup-config`.
+
+Where runtime state and configuration can disagree, the runtime output wins:
+`ip ssh version 2` never appears in the config of a switch that runs SSHv2 by
+default, so the SSH check reads `show ip ssh` and only falls back to the config
+(as an info-level "could not confirm") when that command is unavailable.
 
 Checks performed per switch:
 
@@ -159,7 +164,9 @@ Checks performed per switch:
 | `GLOBAL_BPDUFILTER` / `EDGE_UNPROTECTED` | warning | Risky global STP defaults |
 | `DTP_ENABLED` | warning | Port has no explicit switchport mode, so DTP can negotiate a trunk |
 | `NATIVE_VLAN_1` / `TRUNK_ALLOWS_ALL` | warning | Trunk native VLAN left at 1 / trunk not pruned |
-| `NO_EXEC_TIMEOUT` / `VTY_NO_ACL` / `SSH_V1` / `NO_NTP` | warning | Management-plane hygiene: sessions never expire, unrestricted VTY, SSH not pinned to v2, no time source |
+| `NO_EXEC_TIMEOUT` / `VTY_NO_ACL` / `NO_NTP` | warning | Management-plane hygiene: sessions never expire, unrestricted VTY, no time source |
+| `SSH_V1` | warning | `show ip ssh` reports version 1.99 (accepts SSHv1) or 1.x. Demoted to info when `show ip ssh` is unavailable and only the config could be checked |
+| `SSH_DISABLED` | warning | SSH is not enabled on the switch at all |
 | `VLAN1_IN_USE` / `UNUSED_PORT_OPEN` | info | Access traffic on default VLAN 1 / live unused ports (aggregated per switch) |
 | `INTERFACE_ERRORS_HISTORIC` | info | Error counters on a port with no link - history from an earlier device, not a live fault |
 | `NO_LOGGING_HOST` | info | No syslog collector configured |

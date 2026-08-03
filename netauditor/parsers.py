@@ -269,6 +269,31 @@ def interface_config_attrs(lines: "list[str]") -> dict:
     return attrs
 
 
+def parse_ip_ssh(text: str) -> dict:
+    """Parse 'show ip ssh' - the authority on the SSH version actually in use.
+
+    Returns {"available": bool, "enabled": bool|None, "version": str}. version is
+    "2.0" (v2 only), "1.99" (accepts v1 AND v2), "1.5"/"1" (v1 only) or "".
+    """
+    text = text or ""
+    result = {"available": False, "enabled": None, "version": ""}
+    # An unsupported command leaves an error marker rather than status output.
+    if not text.strip() or "% Invalid" in text or "^" in text.splitlines()[0:1]:
+        return result
+    m = re.search(r"SSH\s+(Enabled|Disabled)", text, re.IGNORECASE)
+    if not m and "ssh" not in text.lower():
+        return result
+    result["available"] = True
+    if m:
+        result["enabled"] = m.group(1).lower() == "enabled"
+    v = re.search(r"version\s+(\d+(?:\.\d+)?)", text, re.IGNORECASE)
+    if v:
+        result["version"] = v.group(1)
+    if result["enabled"] is None and result["version"]:
+        result["enabled"] = True
+    return result
+
+
 def parse_vtp_status(text: str) -> dict:
     """Extract VTP operating mode and domain from 'show vtp status'."""
     mode = re.search(r"VTP Operating Mode\s*:\s*(.+)", text or "")

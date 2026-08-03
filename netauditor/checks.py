@@ -90,7 +90,8 @@ def build_host_report(result: dict) -> dict:
     findings.extend(_check_mac_flaps(parsers.parse_mac_flaps(out.get("logging", ""))))
     findings.extend(_check_vtp(parsers.parse_vtp_status(out.get("vtp_status", ""))))
     if config:
-        findings.extend(_check_config_hygiene(config, parsers.parse_line_configs(config)))
+        findings.extend(_check_config_hygiene(config, parsers.parse_line_configs(config),
+                                              parsers.parse_ip_ssh(out.get("ip_ssh", ""))))
     if not config:
         findings.append(Finding("NO_CONFIG", "warning",
                                 "Running config could not be collected; drift analysis will skip this host."))
@@ -278,7 +279,46 @@ def _check_vlan1_usage(interfaces: "list[dict]") -> "list[Finding]":
     return findings
 
 
-def _check_config_hygiene(config: str, line_blocks: "dict[str, list]") -> "list[Finding]":
+def _check_ssh_version(lines, ssh: dict) -> "list[Finding]":
+    """SSH version state - 'show ip ssh' is authoritative, config is the fallback.
+
+    The running config only reveals an explicitly configured 'ip ssh version 2';
+    it cannot show the default/negotiated state, so a switch already running v2
+    would otherwise be warned about forever.
+    """
+    if ssh.get("available"):
+        if ssh.get("enabled") is False:
+            return [Finding(
+                "SSH_DISABLED", "warning",
+                "SSH is disabled on this switch - management is either unavailable or "
+                "relies on telnet. Generate a key ('crypto key generate rsa modulus 2048') "
+                "and enable SSH.")]
+        version = ssh.get("version", "")
+        if version.startswith("1.99"):
+            return [Finding(
+                "SSH_V1", "warning",
+                "SSH runs in compatibility mode (version 1.99): the switch still accepts "
+                "SSHv1 connections, which are cryptographically broken. Set "
+                "'ip ssh version 2' to refuse v1.")]
+        if version.startswith("1"):
+            return [Finding(
+                "SSH_V1", "warning",
+                f"SSH is running version {version} - SSHv1 is cryptographically broken. "
+                "Set 'ip ssh version 2'.")]
+        return []  # 2.0: actually secure, whatever the config does or does not say
+    # 'show ip ssh' unavailable: fall back to the config, but say so and stay quiet
+    # enough not to nag switches that may already be fine.
+    if "ip ssh version 2" not in lines:
+        return [Finding(
+            "SSH_V1", "info",
+            "'ip ssh version 2' is not in the config and 'show ip ssh' was unavailable, "
+            "so the running SSH version could not be confirmed. Check with 'show ip ssh' - "
+            "version 1.99 means SSHv1 is still accepted.")]
+    return []
+
+
+def _check_config_hygiene(config: str, line_blocks: "dict[str, list]",
+                          ssh: dict = None) -> "list[Finding]":
     """Management-plane hygiene checks common on out-of-the-box configs."""
     findings = []
     lines = [l.strip() for l in config.splitlines()]
@@ -299,11 +339,7 @@ def _check_config_hygiene(config: str, line_blocks: "dict[str, list]") -> "list[
             "VTY lines accept management connections from any source address - add an "
             "'access-class <acl> in' restricting SSH to the management network."))
 
-    if "ip ssh version 2" not in lines:
-        findings.append(Finding(
-            "SSH_V1", "warning",
-            "'ip ssh version 2' is not set - older IOS falls back to the broken SSHv1 "
-            "protocol. Pinning version 2 is harmless where v2 is already the default."))
+    findings.extend(_check_ssh_version(lines, ssh or {}))
 
     if not any(l.startswith(("ntp server", "ntp peer")) for l in lines):
         findings.append(Finding(
