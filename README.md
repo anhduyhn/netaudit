@@ -161,6 +161,7 @@ Checks performed per switch:
 | `NATIVE_VLAN_1` / `TRUNK_ALLOWS_ALL` | warning | Trunk native VLAN left at 1 / trunk not pruned |
 | `NO_EXEC_TIMEOUT` / `VTY_NO_ACL` / `SSH_V1` / `NO_NTP` | warning | Management-plane hygiene: sessions never expire, unrestricted VTY, SSH not pinned to v2, no time source |
 | `VLAN1_IN_USE` / `UNUSED_PORT_OPEN` | info | Access traffic on default VLAN 1 / live unused ports (aggregated per switch) |
+| `INTERFACE_ERRORS_HISTORIC` | info | Error counters on a port with no link - history from an earlier device, not a live fault |
 | `NO_LOGGING_HOST` | info | No syslog collector configured |
 | `LEGACY_STP` | info | Legacy PVST+ mode |
 

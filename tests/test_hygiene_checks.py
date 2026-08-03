@@ -117,6 +117,62 @@ class TestCleanConfig(unittest.TestCase):
             self.assertNotIn(code, codes)
 
 
+class TestErrorCounterLinkState(unittest.TestCase):
+    STATUS = ("Port      Name               Status       Vlan       Duplex  Speed Type\n"
+              "Gi1/0/10  live-port          connected    20         a-full  a-100 10/100/1000BaseTX\n"
+              "Gi1/0/11  dead-port          notconnect   20           auto   auto 10/100/1000BaseTX\n")
+    INTERFACES = """\
+GigabitEthernet1/0/10 is up, line protocol is up (connected)
+     2718 input errors, 2536 CRC, 0 frame, 0 overrun, 0 ignored
+     0 output errors, 0 collisions, 0 interface resets
+     0 babbles, 0 late collision, 0 deferred
+GigabitEthernet1/0/11 is down, line protocol is down (notconnect)
+     900 input errors, 880 CRC, 0 frame, 0 overrun, 0 ignored
+     0 output errors, 0 collisions, 0 interface resets
+     0 babbles, 0 late collision, 0 deferred
+"""
+
+    def setUp(self):
+        report = checks.build_host_report({
+            "host": "10.0.0.1", "name": "sw1", "error": None,
+            "outputs": {"interfaces_status": self.STATUS,
+                        "interfaces": self.INTERFACES,
+                        "running_config": "interface GigabitEthernet1/0/10\n"
+                                          " switchport mode access\n"
+                                          " spanning-tree portfast\n"
+                                          " spanning-tree bpduguard enable\n"
+                                          "interface GigabitEthernet1/0/11\n"
+                                          " switchport mode access\nend\n"}})
+        self.by_code = {}
+        for f in report["findings"]:
+            self.by_code.setdefault(f["code"], []).append(f)
+
+    def test_connected_port_is_a_warning(self):
+        live = self.by_code["INTERFACE_ERRORS"]
+        self.assertEqual(len(live), 1)
+        self.assertEqual(live[0]["interface"], "Gi1/0/10")
+        self.assertEqual(live[0]["severity"], "warning")
+
+    def test_down_port_is_demoted_to_info(self):
+        historic = self.by_code["INTERFACE_ERRORS_HISTORIC"]
+        self.assertEqual(len(historic), 1)
+        self.assertEqual(historic[0]["interface"], "Gi1/0/11")
+        self.assertEqual(historic[0]["severity"], "info")
+        self.assertIn("historical counters", historic[0]["message"])
+
+    def test_down_port_not_flagged_as_live_error(self):
+        self.assertNotIn("Gi1/0/11",
+                         [f["interface"] for f in self.by_code["INTERFACE_ERRORS"]])
+
+    def test_100m_hint_on_gigabit_port(self):
+        self.assertIn("negotiated only 100M",
+                      self.by_code["INTERFACE_ERRORS"][0]["message"])
+
+    def test_counter_age_caveat_present(self):
+        self.assertIn("cumulative since boot",
+                      self.by_code["INTERFACE_ERRORS"][0]["message"])
+
+
 class TestRoutedPortExempt(unittest.TestCase):
     def test_routed_port_not_flagged_for_dtp(self):
         status = ("Port      Name               Status       Vlan       Duplex  Speed Type\n"

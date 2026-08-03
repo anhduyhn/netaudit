@@ -187,6 +187,7 @@ _CODE_TITLES = {
     "HALF_DUPLEX": "Half-duplex link",
     "LATE_COLLISIONS": "Late collisions (duplex mismatch)",
     "INTERFACE_ERRORS": "High error counters",
+    "INTERFACE_ERRORS_HISTORIC": "Old error counters on a down port",
     "GLOBAL_BPDUFILTER": "Global BPDU filter enabled",
     "EDGE_UNPROTECTED": "PortFast default without BPDU guard",
     "LEGACY_STP": "Legacy PVST+ mode",

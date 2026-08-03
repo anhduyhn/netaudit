@@ -80,6 +80,13 @@ SNIPPETS = {
 NO_SNIPPET = {"UNREACHABLE", "NO_CONFIG", "STP_CHURN_HISTORY", "STP_RECENT_CHANGE",
               "INTERFACE_ERRORS", "LATE_COLLISIONS"}
 
+def _clear_counters(interface: str) -> str:
+    """Exec-mode (not config-mode) counter reset."""
+    return f"clear counters {interface or '<interface>'}"
+
+
+SNIPPETS["INTERFACE_ERRORS_HISTORIC"] = _clear_counters
+
 
 def snippet_for(code: str, interface: str = "") -> str:
     """Return an IOS snippet for a finding code, or '' when there isn't a sane one."""

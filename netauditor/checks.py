@@ -228,10 +228,26 @@ def _check_interface(iface: dict) -> "list[Finding]":
                 "vlan' so only the VLANs actually needed cross this link.", name))
 
     if iface["input_errors"] >= ERROR_COUNTER_THRESHOLD or iface["crc"] >= ERROR_COUNTER_THRESHOLD:
-        findings.append(Finding(
-            "INTERFACE_ERRORS", "warning",
-            f"{name} shows {iface['input_errors']} input errors / {iface['crc']} CRC errors - "
-            "check cabling, SFPs and duplex.", name))
+        # Error counters are cumulative since boot / 'clear counters', so a port
+        # with no link is reporting history, not a live fault.
+        if iface["status"] != "connected":
+            findings.append(Finding(
+                "INTERFACE_ERRORS_HISTORIC", "info",
+                f"{name} carries {iface['input_errors']} input errors / {iface['crc']} CRC "
+                f"from an earlier link, but the port is {iface['status']} now - historical "
+                "counters, not a live fault. 'clear counters' to reset the baseline.", name))
+        else:
+            # 100M on a gigabit-capable port alongside CRCs usually means a
+            # damaged run: too few usable pairs to negotiate 1000.
+            speed = iface.get("speed", "")
+            hint = (" The port negotiated only 100M, which together with CRC errors "
+                    "often means a damaged cable run."
+                    if speed.lstrip("a-").startswith("100") else "")
+            findings.append(Finding(
+                "INTERFACE_ERRORS", "warning",
+                f"{name} shows {iface['input_errors']} input errors / {iface['crc']} CRC "
+                f"errors - check cabling, SFPs and duplex.{hint} Counters are cumulative "
+                "since boot; 'clear counters' then re-audit to see the current rate.", name))
 
     return findings
 
