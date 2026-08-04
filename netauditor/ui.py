@@ -25,6 +25,15 @@ from .ui_data import (ALL_ROW_NAME, SEVERITY_CYCLE, aggregate_row, build_rows,
 _SEV_STYLE = {"critical": "bold red", "warning": "yellow", "info": "cyan"}
 _UNGROUPED_LABEL = "ungrouped"
 
+# Many terminals render U+2717 with the emoji font, which paints its own colour
+# and ignores ours - a white X bleeding through a red row. Plain ASCII "X"
+# always takes the style we give it. (U+25CF renders as text and is fine.)
+GLYPH_BAD = "X"
+GLYPH_WARN = "!"
+GLYPH_OK = "●"
+GLYPH_FIXED = "+"      # U+2713 has the same emoji-font problem as U+2717
+GLYPH_ALERT = "!!"
+
 
 def _sev(severity: str) -> Text:
     return Text(severity, style=_SEV_STYLE.get(severity, ""))
@@ -194,8 +203,8 @@ class DetailScreen(Screen):
         label = " ".join(str(v) for v in (facts.get("model"), facts.get("version")) if v)
         if label:
             header.append(f"  {label}")
-        header.append(f"\n✗ {row['critical']} critical", style="bold red")
-        header.append(f"  ! {row['warning']} warning", style="yellow")
+        header.append(f"\n{GLYPH_BAD} {row['critical']} critical", style="bold red")
+        header.append(f"  {GLYPH_WARN} {row['warning']} warning", style="yellow")
         header.append(f"  · {row['info']} info", style="cyan")
         if row.get("unsaved"):
             header.append("  ± UNSAVED CONFIG - lost at reboot", style="bold dark_orange")
@@ -330,8 +339,8 @@ class ChangesScreen(Screen):
         totals = self.delta.get("totals", {})
         header = Text("Changes since ", style="bold cyan")
         header.append(self.label, style="dim")
-        header.append(f"\n✓ {totals.get('fixed', 0)} fixed", style="green")
-        header.append(f"   + {totals.get('added', 0)} new", style="bold red")
+        header.append(f"\n{GLYPH_FIXED} {totals.get('fixed', 0)} fixed", style="green")
+        header.append(f"   {GLYPH_BAD} {totals.get('added', 0)} new", style="bold red")
         header.append(f"   = {totals.get('still_open', 0)} unchanged", style="dim")
         if self.delta.get("new_switches"):
             header.append(f"   new switches: {len(self.delta['new_switches'])}",
@@ -343,12 +352,12 @@ class ChangesScreen(Screen):
         table.add_columns("", "Switch", "Sev", "Code", "Port", "Message")
         for sw in self.delta.get("switches", []):
             for f in sw["fixed"]:
-                table.add_row(Text("✓ fixed", style="green"), sw["name"],
+                table.add_row(Text(f"{GLYPH_FIXED} fixed", style="green"), sw["name"],
                               _sev(f.get("severity", "")), f.get("code", ""),
                               f.get("interface", ""),
                               Text(str(f.get("message", ""))[:120]))
             for f in sw["added"]:
-                table.add_row(Text("+ new", style="bold red"), sw["name"],
+                table.add_row(Text(f"{GLYPH_BAD} new", style="bold red"), sw["name"],
                               _sev(f.get("severity", "")), f.get("code", ""),
                               f.get("interface", ""),
                               Text(str(f.get("message", ""))[:120]))
@@ -522,16 +531,17 @@ class AuditUI(App):
         if self.watch:
             pr = self.probe_results.get(r.get("host") or "")
             if pr is not None:
-                return Text("●", style="green") if pr["ok"] else Text("✗", style="bold red")
+                return (Text(GLYPH_OK, style="green") if pr["ok"]
+                        else Text(GLYPH_BAD, style="bold red"))
             return Text("·", style="dim")  # not probed yet
         if r.get("error") or r["critical"]:
-            return Text("✗", style="bold red")
+            return Text(GLYPH_BAD, style="bold red")
         if r["warning"]:
-            return Text("!", style="yellow")
-        return Text("●", style="green")
+            return Text(GLYPH_WARN, style="yellow")
+        return Text(GLYPH_OK, style="green")
 
     def _audit_cell(self, r) -> Text:
-        """Audit flags: ✗n criticals, !n warnings, ● clean, - never audited."""
+        """Audit flags: 'X n' criticals, '! n' warnings, clean marker, - never audited."""
         if r.get("ghost"):
             return Text("stale", style="dim")
         if r.get("error"):
@@ -540,11 +550,13 @@ class AuditUI(App):
             return Text("-", style="dim")
         cell = Text()
         if r["critical"]:
-            cell.append(f"✗{r['critical']} ", style="bold red")
+            cell.append(f"{GLYPH_BAD} {r['critical']}", style="bold red")
         if r["warning"]:
-            cell.append(f"!{r['warning']}", style="yellow")
+            if r["critical"]:
+                cell.append("  ")
+            cell.append(f"{GLYPH_WARN} {r['warning']}", style="yellow")
         if not r["critical"] and not r["warning"]:
-            cell.append("●", style="green")
+            cell.append(GLYPH_OK, style="green")
         if r.get("unsaved"):
             cell.append(" ±", style="bold dark_orange")
         return cell
@@ -671,11 +683,11 @@ class AuditUI(App):
         text = Text()
         text.append("netauditor", style="bold cyan")
         text.append(f" | {len(rows)} switches | ", style="dim")
-        text.append("● ", style="green")
+        text.append(f"{GLYPH_OK} ", style="green")
         text.append(str(clean), style="green")
-        text.append("  ✗ ", style="bold red")
+        text.append(f"  {GLYPH_BAD} ", style="bold red")
         text.append(str(crit), style="bold red")
-        text.append("  ! ", style="yellow")
+        text.append(f"  {GLYPH_WARN} ", style="yellow")
         text.append(str(warn), style="yellow")
         text.append("  ? ", style="dim")
         text.append(str(ghosts), style="dim" if not ghosts else "bold magenta")
@@ -709,7 +721,7 @@ class AuditUI(App):
         banner = self.query_one("#unsavedbar", Static)
         if affected:
             names = ", ".join(affected[:6]) + (", ..." if len(affected) > 6 else "")
-            banner.update(f"⚠ {len(affected)} switch(es) with UNSAVED config changes "
+            banner.update(f"{GLYPH_ALERT} {len(affected)} switch(es) with UNSAVED config changes "
                           f"(lost at reboot): {names}")
             banner.add_class("visible")
         else:
@@ -743,8 +755,8 @@ class AuditUI(App):
         elif row.get("error"):
             text.append(f"UNREACHABLE: {row['error']}", style="bold red")
         else:
-            text.append(f"✗ {row['critical']} critical", style="bold red")
-            text.append(f"   ! {row['warning']} warning", style="yellow")
+            text.append(f"{GLYPH_BAD} {row['critical']} critical", style="bold red")
+            text.append(f"   {GLYPH_WARN} {row['warning']} warning", style="yellow")
             text.append(f"   · {row['info']} info", style="cyan")
             if row.get("unsaved"):
                 text.append("   ± UNSAVED CONFIG", style="bold dark_orange")
