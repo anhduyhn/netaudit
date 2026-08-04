@@ -460,11 +460,15 @@ class AuditUI(App):
         table.cursor_type = "row"
         table.zebra_stripes = True
         table.border_title = "Switches"
+        # Columns whose content arrives later (probe results) or is a fixed
+        # format get an explicit width: DataTable sizes a column when rows are
+        # added, so a later update_cell would otherwise stay truncated.
+        widths = {"st": 2, "ms": 5, "seen": 8, "audited": 16}
         for label, key in [("St", "st"), ("Switch", "switch"), ("IP", "ip"),
                            ("Campus", "campus"), ("Model", "model"), ("IOS", "ios"),
                            ("Audit", "audit"), ("ms", "ms"), ("Seen", "seen"),
                            ("Audited", "audited")]:
-            table.add_column(label, key=key)
+            table.add_column(label, key=key, width=widths.get(key))
         self.last_drift = load_drift(self.outdir)
         self._populate_hosts()
         self._update_unsaved_banner()
@@ -646,9 +650,11 @@ class AuditUI(App):
                 continue
             ms_cell, seen_cell = self._probe_cells(row)
             try:
-                table.update_cell(key, "st", self._st_cell(row))
-                table.update_cell(key, "ms", ms_cell)
-                table.update_cell(key, "seen", seen_cell)
+                # update_width lets a column grow when the new value is wider
+                # than whatever was there when the row was added.
+                table.update_cell(key, "st", self._st_cell(row), update_width=True)
+                table.update_cell(key, "ms", ms_cell, update_width=True)
+                table.update_cell(key, "seen", seen_cell, update_width=True)
             except Exception:
                 pass  # table repopulated mid-apply; next sweep catches up
         self._update_status()
