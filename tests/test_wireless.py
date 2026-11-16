@@ -279,6 +279,14 @@ controllers:
         self.assertEqual(ctrls[1].nps_host, "nps01.example")
         self.assertEqual(ctrls[1].username, "admin")
 
+    def test_ap_list_controller_needs_no_credentials(self):
+        text = "controllers:\n  - host: 10.0.8.5\n    group: delahey\n    ap_list: aps.txt\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            inv = Path(tmp) / "inventory.yml"
+            inv.write_text(text, encoding="utf-8")
+            ctrls = load_controllers(inv, prompt_missing=False, require_credentials=True)
+        self.assertEqual(Path(ctrls[0].ap_list), Path(tmp) / "aps.txt")   # relative to the inventory
+
 
 def _inventory(folder: Path) -> Path:
     inv = folder / "inventory.yml"

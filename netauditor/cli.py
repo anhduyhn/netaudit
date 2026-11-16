@@ -375,38 +375,21 @@ def cmd_trace(args) -> int:
         return 2
     date = "" if args.all_days else wireless.nps_date(day)
 
-    logs = [args.nps_log] if args.nps_log else [
-        rf"\\{c.nps_host}\LogFiles$\{wireless.nps_log_name(day)}" for c in controllers if c.nps_host]
-    macs = [wireless.norm_mac(m) for m in args.mac.split(",") if m.strip()] if args.mac else []
+    logs = wireless.nps_log_paths(controllers, day, explicit=args.nps_log)
+    macs = [m for m in args.mac.split(",") if m.strip()] if args.mac else []
     if not logs and not macs:
         print("error: no NPS log - pass --nps-log PATH, give controllers an 'nps_host' in the "
               "inventory, or list devices with --mac", file=sys.stderr)
         return 2
-
-    stats = {}
-    for path in logs:
-        print(f"Reading NPS log {path} ({'every day' if not date else date})...")
-        try:
-            stats.update(wireless.read_nps_log(path, date=date))
-        except OSError as exc:
-            print(f"error: cannot read {path}: {exc}\n  (the LogFiles$ share must be reachable "
-                  "with your credentials - e.g. run NPS-LogViewer once, or 'net use' it)",
-                  file=sys.stderr)
-            return 2
-    problems = wireless.find_problem_devices(stats, args.min_requests, args.min_rejects)
-    known = {p["mac"] for p in problems}
-    for mac in macs:
-        if mac and mac not in known:
-            base = stats.get(mac) or {"mac": mac, "users": [], "requests": 0, "accepts": 0,
-                                      "rejects": 0, "reasons": {}, "ap_radio_mac": "", "ssid": "",
-                                      "nas_ip": "", "nas_name": "", "first": "", "last": "",
-                                      "date": date}
-            problems.append(dict(base, kind="manual", reasons=dict(base.get("reasons") or {})))
-    total_req = sum(e["requests"] for e in stats.values())
+    try:
+        problems, _ = wireless.gather_problems(logs, date, args.min_requests, args.min_rejects,
+                                               macs=macs, say=print)
+    except OSError as exc:
+        print(f"error: cannot read the NPS log: {exc}\n  (the LogFiles$ share must be reachable "
+              "with your credentials - e.g. run NPS-LogViewer once, or 'net use' it)",
+              file=sys.stderr)
+        return 2
     looping = [p for p in problems if p["kind"] == "looping"]
-    print(f"  {len(stats)} devices, {total_req} login requests; "
-          f"{len(looping)} looping ({sum(p['requests'] for p in looping)} requests), "
-          f"{sum(1 for p in problems if p['kind'] == 'rejected')} only rejected")
     if not problems:
         print("No problem devices found.")
         return 0
@@ -469,6 +452,17 @@ def cmd_ui(args) -> int:
 
     from .ui_data import build_rows, load_audit
 
+    controllers = []
+    if inventory:
+        from .inventory import load_controllers
+        try:
+            controllers = load_controllers(inventory, prompt_missing=False,
+                                           require_credentials=False)
+        except InventoryError as exc:
+            print(f"warning: controllers ignored: {exc}", file=sys.stderr)
+        if args.group and controllers:
+            controllers, _ = _filter_by_group(controllers, lambda h: h.group, args.group)
+
     audit = load_audit(args.output)
     if audit and args.group:
         wanted = {g.strip().lower() for g in args.group.split(",") if g.strip()}
@@ -498,7 +492,7 @@ def cmd_ui(args) -> int:
     outdir = out if out.is_dir() or not out.suffix else out.parent
     AuditUI(build_rows(hosts, audit), inv_hosts=hosts, outdir=outdir,
             generated=(audit or {}).get("generated", ""),
-            probe_interval=args.interval).run()
+            probe_interval=args.interval, controllers=controllers).run()
     return 0
 
 

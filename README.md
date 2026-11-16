@@ -322,6 +322,8 @@ Keys:
 | `c` | Changes since the previous audit snapshot: what got fixed, what is new. |
 | `g` | Re-render every HTML report (combined and per-campus) from the stored audit data - no switches contacted. Same as `netauditor report`. |
 | `p` | Prune stale entries (switches no longer in the inventory, shown dim with `?`) after a confirmation listing them. |
+| `t` | Wi-Fi trace for the current campus tab: today's problem devices from the NPS log, traced to an AP and switch port (see 7). Opens a results screen: `b` switches between devices and "by access point", `o` opens `trace.html`. |
+| `T` | Reopen the last trace from `out/trace.json` without re-running it. |
 | `w` | Toggle watch mode (on by default with an inventory): TCP-probes every switch on an interval (`--interval`, default 15s). `St` shows live up/down, `ms`/`Seen` columns update, and the status bar shows `live ↑N ↓N | next scan Ns`. Audit flags stay in their own column. |
 | `s` | Live SSH session on the selected switch; ending it returns to the dashboard. |
 | `/` | Find switches by name/IP (Esc clears). In the detail screen: filter findings. |
@@ -382,6 +384,20 @@ Live client state ("on the network now") needs the real controller, so it
 shows "not checked". The AP list is cached in `trace.json`, so later
 `--offline` runs keep the names. Leave out `--no-switches` to still look up
 switch ports, which logs in to the switches.
+
+To make that permanent, give the controller an `ap_list` in the inventory
+(a path relative to the inventory file). That controller is then never logged
+in to and needs no credentials, from the CLI or the dashboard:
+
+```yaml
+    controllers:
+      - host: 10.128.168.5
+        nps_host: 8799STADC02.services.education.vic.gov.au
+        ap_list: delahey-aps.txt
+```
+
+In the dashboard, `t` runs the same trace for the current campus tab with the
+default thresholds and today's date.
 
 Controllers go in their own `controllers` list, so audits never touch them.
 They take the inventory's credentials, and `device_type` defaults to

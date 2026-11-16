@@ -38,6 +38,7 @@ class Host:
     port: int = 22
     group: str = ""  # campus/site; "" means ungrouped
     nps_host: str = ""  # controllers only: the NPS server whose LogFiles$ share holds its RADIUS log
+    ap_list: str = ""   # controllers only: saved 'show ap join stats' output used instead of SSH
 
     def display_name(self) -> str:
         return self.name or self.host
@@ -163,6 +164,9 @@ def load_controllers(path, prompt_missing: bool = True,
         merged = {k: v for k, v in defaults.items() if k != "device_type"}
         merged.update({k: v for k, v in (group_defaults or {}).items() if k != "device_type"})
         merged.update({k: v for k, v in entry.items() if v is not None})
+        ap_list = str(merged.get("ap_list", "") or "")
+        if ap_list and not Path(ap_list).is_absolute():
+            ap_list = str(path.parent / ap_list)   # relative to the inventory file
         controllers.append(Host(
             host=str(merged["host"]),
             name=str(merged.get("name", "") or ""),
@@ -173,6 +177,7 @@ def load_controllers(path, prompt_missing: bool = True,
             port=int(merged.get("port", 22) or 22),
             group=str(merged.get("group", group) or ""),
             nps_host=str(merged.get("nps_host", "") or ""),
+            ap_list=ap_list,
         ))
 
     top = data.get("controllers") or []
@@ -186,10 +191,12 @@ def load_controllers(path, prompt_missing: bool = True,
                 add(entry, group=str(gname), group_defaults=gdata.get("defaults") or {})
     if controllers:
         _apply_env(controllers)
+        # a controller with a saved AP list is never logged in to
+        needs_login = [c for c in controllers if not c.ap_list]
         if prompt_missing:
-            _prompt_missing(controllers)
+            _prompt_missing(needs_login)
         if require_credentials:
-            missing = [c.host for c in controllers if not c.username or not c.password]
+            missing = [c.host for c in needs_login if not c.username or not c.password]
             if missing:
                 raise InventoryError("no credentials for controller(s): " + ", ".join(missing))
     return controllers

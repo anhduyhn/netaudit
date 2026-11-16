@@ -387,6 +387,151 @@ class LogScreen(Screen):
         self.query_one("#log", RichLog).write(line)
 
 
+_TRACE_STYLE = {"looping": "bold red", "rejected": "yellow", "manual": "cyan"}
+
+
+def _trace_now(r: dict) -> Text:
+    live = r.get("live")
+    if live == "unknown":
+        text = Text("not checked", style="dim")
+    elif isinstance(live, dict):
+        state = live.get("policy_state") or live.get("state") or "connected"
+        text = Text(f"{state} on {live.get('ap_name', '')}",
+                    style="green" if state.upper() == "RUN" else "yellow")
+    else:
+        text = Text("not connected", style="dim")
+    if r.get("excluded"):
+        text.append("  EXCLUDED", style="bold red")
+    return text
+
+
+def _trace_port(sw) -> str:
+    if not sw:
+        return "-"
+    return f"{sw['switch']} {sw['port']}" + ("" if sw.get("certain", True) else " (uplink?)")
+
+
+class TraceScreen(Screen):
+    """Wi-Fi problem devices traced to an AP and switch port."""
+
+    CSS = """
+    #trheader { height: 4; padding: 0 1; border: round $secondary; }
+    #trace { height: 1fr; border: round $secondary; }
+    #trdetail { dock: bottom; height: 6; border: round $secondary; padding: 0 1; }
+    #trhint { dock: bottom; height: 1; padding: 0 1; background: $surface; }
+    """
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "back", show=False),
+        Binding("b", "toggle_view", "by AP", show=False),
+        Binding("o", "open_report", "open report", show=False),
+    ]
+
+    def __init__(self, trace: dict, outdir):
+        super().__init__()
+        self.trace = trace or {}
+        self.outdir = Path(outdir)
+        self.by_ap = False
+
+    def compose(self) -> ComposeResult:
+        yield Static(id="trheader")
+        yield DataTable(id="trace")
+        yield Static(id="trdetail")
+        yield Static(_hints([("esc", "back"), ("b", "devices / by access point"),
+                             ("o", "open trace.html"), ("q", "quit")]), id="trhint")
+
+    def on_mount(self) -> None:
+        rows = self.trace.get("devices", [])
+        kinds = {k: sum(1 for r in rows if r.get("kind") == k) for k in _TRACE_STYLE}
+        header = Text("Wi-Fi problem devices", style="bold cyan")
+        header.append(f"  {kinds['looping']} looping", style="bold red" if kinds["looping"] else "dim")
+        header.append(f"  {kinds['rejected']} rejected", style="yellow" if kinds["rejected"] else "dim")
+        header.append(f"  ·  {sum(1 for r in rows if r.get('ap'))} traced to an AP", style="dim")
+        header.append(f"\nday {self.trace.get('date') or 'all'}  ·  "
+                      f"{', '.join(self.trace.get('nps_logs', [])) or 'no NPS log'}", style="dim")
+        if self.trace.get("generated"):
+            header.append(f"  ·  {self.trace['generated']}", style="dim")
+        self.query_one("#trheader", Static).update(header)
+        table = self.query_one("#trace", DataTable)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+        self._fill()
+        table.focus()
+
+    def _fill(self) -> None:
+        table = self.query_one("#trace", DataTable)
+        table.clear(columns=True)
+        if self.by_ap:
+            table.border_title = "By access point - where to go"
+            table.add_columns("Access point", "Location", "Switch port", "Devices", "Requests")
+            for g in self.trace.get("by_ap", []):
+                table.add_row(Text(g["ap"], style="bold"), g.get("location", ""),
+                              _trace_port(g.get("switch")), str(g["devices"]), str(g["requests"]))
+        else:
+            table.border_title = "Devices"
+            table.add_columns("Kind", "Client MAC", "Account", "Req", "Rej", "Access point",
+                              "Switch port", "Now")
+            for r in self.trace.get("devices", []):
+                ap = r["ap"]["name"] if r.get("ap") else (r.get("ap_radio_mac") or "-")
+                table.add_row(Text(r.get("kind", ""), style=_TRACE_STYLE.get(r.get("kind"), "")),
+                              r["mac"], ", ".join(r.get("users", []))[:32],
+                              str(r.get("requests", 0)), str(r.get("rejects", 0)), ap,
+                              _trace_port(r.get("switch")), _trace_now(r))
+        self._show_detail(0)
+
+    def _show_detail(self, index: int) -> None:
+        strip = self.query_one("#trdetail", Static)
+        if self.by_ap:
+            groups = self.trace.get("by_ap", [])
+            g = groups[index] if 0 <= index < len(groups) else None
+            strip.update(Text(f"{g['ap']}: {', '.join(g['macs'])}") if g else Text(""))
+            return
+        devices = self.trace.get("devices", [])
+        r = devices[index] if 0 <= index < len(devices) else None
+        if not r:
+            strip.update(Text("No problem devices.", style="dim"))
+            return
+        from .wireless import REASON_TEXT
+        text = Text(f"{r['mac']}", style="bold")
+        if r.get("random_mac"):
+            text.append("  random MAC (phone/tablet)", style="dim")
+        text.append(f"  active {r.get('first', '')} - {r.get('last', '')}", style="dim")
+        text.append(f"\naccount: {', '.join(r.get('users', [])) or '-'}")
+        ap = r.get("ap")
+        if ap:
+            text.append(f"\nAP {ap['name']}", style="cyan")
+            extra = "  ".join(x for x in (ap.get("location"), ap.get("model"), ap.get("ip")) if x)
+            text.append(f"  {extra}" if extra else "", style="dim")
+            if ap.get("match") == "approx":
+                text.append("  (nearest radio MAC)", style="dim")
+        else:
+            text.append(f"\nAP radio MAC {r.get('ap_radio_mac') or '-'} (no AP name)", style="dim")
+        sw = r.get("switch")
+        if sw and sw.get("description"):
+            text.append(f"  ·  port '{sw['description']}'", style="dim")
+        reasons = r.get("reasons") or {}
+        if reasons:
+            top = sorted(reasons.items(), key=lambda kv: -kv[1])[:2]
+            text.append("\nrejects: " + ", ".join(
+                f"{n}x {REASON_TEXT.get(code, 'reason ' + code)}" for code, n in top), style="yellow")
+        strip.update(text)
+
+    @on(DataTable.RowHighlighted, "#trace")
+    def _highlighted(self, event) -> None:
+        self._show_detail(event.cursor_row)
+
+    def action_toggle_view(self) -> None:
+        self.by_ap = not self.by_ap
+        self._fill()
+
+    def action_open_report(self) -> None:
+        import webbrowser
+        page = self.outdir / "trace.html"
+        if not page.exists():
+            self.notify("No trace.html yet.", severity="warning")
+            return
+        webbrowser.open(page.resolve().as_uri())
+
+
 class AuditUI(App):
     """Main command-center screen."""
 
@@ -415,15 +560,20 @@ class AuditUI(App):
         Binding("c", "changes", "changes", show=False),
         Binding("g", "generate_reports", "generate reports", show=False),
         Binding("w", "toggle_watch", "watch", show=False),
+        Binding("t", "trace", "wifi trace", show=False),
+        Binding("T", "last_trace", "last trace", show=False),
         Binding("slash", "find", "find", show=False),
         Binding("escape", "clear_find", show=False),
     ]
 
     def __init__(self, rows, inv_hosts=None, outdir="out", generated="",
-                 probe_interval=15):
+                 probe_interval=15, controllers=None):
         super().__init__()
         self.rows = rows
         self.inv_hosts = list(inv_hosts or [])
+        self.controllers = list(controllers or [])
+        self.trace_min_requests = 200   # same defaults as 'netauditor trace'
+        self.trace_min_rejects = 20
         self.outdir = Path(outdir)
         self.generated = generated
         self.campus = "All"
@@ -455,7 +605,7 @@ class AuditUI(App):
         yield Static(id="detailstrip")
         yield Static(_hints([("↑↓", "nav"), ("←→", "campus"), ("⏎", "detail"),
                              ("a", "audit scope"), ("d", "drift"), ("c", "changes"),
-                             ("g", "reports"), ("s", "ssh"), ("w", "watch"),
+                             ("t", "wifi trace"), ("g", "reports"), ("s", "ssh"), ("w", "watch"),
                              ("l", "log"), ("/", "find"), ("p", "prune"),
                              ("r", "reload"), ("q", "quit")]),
                      id="hintbar")
@@ -941,6 +1091,58 @@ class AuditUI(App):
         self._show_log_screen()
         self._drift_worker()
 
+    def action_trace(self) -> None:
+        """Trace today's problem Wi-Fi devices for the current campus tab."""
+        if self._busy:
+            self.notify("A job is already running - press l for the log.",
+                        severity="warning")
+            return
+        scope_label = "all campuses" if self.campus == "All" else self.campus
+        ctrls = hosts_for_scope(self.controllers, self.campus,
+                                ungrouped_label=_UNGROUPED_LABEL)
+        if not ctrls or not any(c.nps_host for c in ctrls):
+            self.notify(f"No controller with an nps_host for {scope_label} in the inventory - "
+                        "add a 'controllers' entry (README: Trace problem Wi-Fi devices).",
+                        severity="warning")
+            return
+        switches = hosts_for_scope(self.inv_hosts, self.campus,
+                                   ungrouped_label=_UNGROUPED_LABEL)
+        needing = [c for c in ctrls if not c.ap_list] + switches
+        if any(not h.username or not h.password for h in needing):
+            default_user = next((h.username for h in needing if h.username), "")
+
+            def with_creds(result) -> None:
+                if not result:
+                    return
+                username, password = result
+                for h in needing:
+                    h.username = h.username or username
+                    h.password = h.password or password
+                self._start_trace(ctrls, switches, scope_label)
+
+            self.push_screen(CredentialsScreen(default_user), with_creds)
+            return
+        self._start_trace(ctrls, switches, scope_label)
+
+    def action_last_trace(self) -> None:
+        import json
+        path = self.outdir / "trace.json"
+        if not path.exists():
+            self.notify("No trace yet - press t to run one.", severity="warning")
+            return
+        try:
+            trace = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as exc:
+            self.notify(f"Cannot read {path}: {exc}", severity="error")
+            return
+        self.push_screen(TraceScreen(trace, self.outdir))
+
+    def _start_trace(self, ctrls, switches, scope_label) -> None:
+        self._busy = True
+        self._job_note = f"wifi trace {scope_label}..."
+        self._show_log_screen()
+        self._trace_worker(list(ctrls), list(switches), scope_label)
+
     def action_ssh(self) -> None:
         self.open_ssh(self.current_row)
 
@@ -1026,6 +1228,57 @@ class AuditUI(App):
             self._log, f"Drift check done: {result['drift']['item_count']} drift item(s), "
                        f"{len(result['findings'])} finding(s) ({criticals} critical).")
         self.call_from_thread(self._finish_drift, result)
+
+    @work(thread=True, exclusive=True, group="jobs")
+    def _trace_worker(self, ctrls, switches, scope_label) -> None:
+        from . import wireless
+        from .ui_data import load_audit
+
+        say = lambda msg: self.call_from_thread(self._log, msg)  # noqa: E731
+        day = datetime.datetime.now()
+        date = wireless.nps_date(day)
+        say(f"Wi-Fi trace started [{scope_label}] for {date} -> {self.outdir}")
+        logs = wireless.nps_log_paths(ctrls, day)
+        try:
+            problems, _ = wireless.gather_problems(logs, date, self.trace_min_requests,
+                                                   self.trace_min_rejects, say=say)
+        except OSError as exc:
+            self.call_from_thread(
+                self._job_failed, f"Cannot read the NPS log: {exc} (the LogFiles$ share must "
+                                  "be reachable with your Windows credentials)")
+            return
+        if not problems:
+            self.call_from_thread(self._finish_trace, None, "No problem devices today.")
+            return
+        wireless.assign_groups(problems, ctrls)
+        try:
+            trace, messages = wireless.run_trace(
+                problems, ctrls, switches, self.outdir,
+                audit_hosts=(load_audit(self.outdir) or {}).get("hosts", []),
+                meta={"date": date, "nps_logs": logs,
+                      "thresholds": {"min_requests": self.trace_min_requests,
+                                     "min_rejects": self.trace_min_rejects}},
+                progress=say)
+        except Exception as exc:
+            self.call_from_thread(self._job_failed, f"Wi-Fi trace failed: {exc}")
+            return
+        for line in messages:
+            say(line)
+        looping = sum(1 for r in trace["devices"] if r["kind"] == "looping")
+        self.call_from_thread(self._finish_trace, trace,
+                              f"Wi-Fi trace done: {looping} looping, "
+                              f"{len(trace['devices']) - looping} other problem device(s).")
+
+    def _finish_trace(self, trace, message: str) -> None:
+        self._busy = False
+        self._job_note = ""
+        self._log(message)
+        self.notify(message)
+        if trace is None:
+            return
+        if isinstance(self.screen, LogScreen):
+            self.pop_screen()
+        self.push_screen(TraceScreen(trace, self.outdir))
 
     def _set_job_note(self, note: str) -> None:
         self._job_note = note

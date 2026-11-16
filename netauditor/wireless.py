@@ -407,6 +407,47 @@ def collect_controller(host, client_macs, timeout: int = 60) -> dict:
     return result
 
 
+def nps_log_paths(controllers, day: datetime, explicit: str = "") -> "list[str]":
+    """The NPS log(s) to read: an explicit path, else each controller's nps_host share."""
+    if explicit:
+        return [explicit]
+    seen, paths = set(), []
+    for c in controllers:
+        if c.nps_host and c.nps_host.lower() not in seen:
+            seen.add(c.nps_host.lower())
+            paths.append(rf"\\{c.nps_host}\LogFiles$\{nps_log_name(day)}")
+    return paths
+
+
+def gather_problems(logs, date: str, min_requests: int = 200, min_rejects: int = 20,
+                    macs=(), say=None) -> "tuple[list, dict]":
+    """Read the NPS log(s) and return (problem devices, per-client stats).
+
+    macs are traced even when the log shows nothing wrong with them (kind
+    'manual'). Raises OSError when a log can't be read.
+    """
+    say = say or (lambda msg: None)
+    stats = {}
+    for path in logs:
+        say(f"Reading NPS log {path} ({date or 'every day'})...")
+        stats.update(read_nps_log(path, date=date))
+    problems = find_problem_devices(stats, min_requests, min_rejects)
+    known = {p["mac"] for p in problems}
+    for mac in (norm_mac(m) for m in macs):
+        if mac and mac not in known:
+            base = stats.get(mac) or {"mac": mac, "users": [], "requests": 0, "accepts": 0,
+                                      "rejects": 0, "reasons": {}, "ap_radio_mac": "", "ssid": "",
+                                      "nas_ip": "", "nas_name": "", "first": "", "last": "",
+                                      "date": date}
+            problems.append(dict(base, kind="manual", reasons=dict(base.get("reasons") or {})))
+            known.add(mac)
+    looping = [p for p in problems if p["kind"] == "looping"]
+    say(f"  {len(stats)} devices, {sum(e['requests'] for e in stats.values())} login requests; "
+        f"{len(looping)} looping ({sum(p['requests'] for p in looping)} requests), "
+        f"{sum(1 for p in problems if p['kind'] == 'rejected')} only rejected")
+    return problems, stats
+
+
 def assign_groups(problems, controllers, default_group: str = "") -> None:
     """Tag each problem with its campus: the controller whose IP sent the request (NAS IP)."""
     by_ip = {c.host: c for c in controllers}
@@ -485,6 +526,23 @@ def run_trace(problems, controllers, switches, outdir, offline: bool = False,
                             "(run once without --offline, or pass --ap-list)")
     else:
         for c in controllers:
+            if c.ap_list:   # saved output configured for this controller: no login
+                try:
+                    got = parse_saved_controller_output(
+                        Path(c.ap_list).read_text(encoding="utf-8", errors="replace"))
+                except OSError as exc:
+                    messages.append(f"controller {c.display_name()}: cannot read ap_list "
+                                    f"{c.ap_list}: {exc}")
+                    continue
+                exclusions.update(got["exclusions"])
+                ctrl_data[c.host] = {"name": c.display_name(), "group": c.group, "error": None,
+                                     "aps": got["aps"], "ap_summary": got["ap_summary"],
+                                     "source": [c.ap_list],
+                                     "collected": datetime.now().astimezone().isoformat(
+                                         timespec="seconds")}
+                say(f"Controller {c.display_name()}: {len(got['aps'])} APs from saved "
+                    f"output {c.ap_list} (not logged in)")
+                continue
             macs = [p["mac"] for p in problems if p.get("controller") in ("", c.host)]
             say(f"Controller {c.display_name()} [{c.host}]: querying {len(macs)} client(s)...")
             res = collect_controller(c, macs, timeout=timeout)
