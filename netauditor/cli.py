@@ -332,6 +332,126 @@ def cmd_connect(args) -> int:
     return connect.open_session(chosen)
 
 
+def cmd_trace(args) -> int:
+    from datetime import datetime
+
+    from . import wireless
+    from .inventory import load_controllers
+    from .ui_data import load_audit
+
+    inventory, err = _resolve_inventory(args.inventory)
+    if err and not args.nps_log:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+    switches, controllers = [], []
+    if inventory:
+        live = not args.offline
+        ctrl_login = live and not args.ap_list   # saved output replaces the controller login
+        try:
+            controllers = load_controllers(inventory,
+                                           prompt_missing=ctrl_login and not args.no_prompt,
+                                           require_credentials=ctrl_login)
+            switches = load_inventory(
+                inventory, require_credentials=False,
+                prompt_missing=live and not args.no_switches and not args.no_prompt)
+        except InventoryError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        if args.group:
+            if controllers:
+                controllers, err = _filter_by_group(controllers, lambda h: h.group, args.group)
+                if err:
+                    print(f"error: {err}", file=sys.stderr)
+                    return 2
+            switches, err = _filter_by_group(switches, lambda h: h.group, args.group)
+            if err:
+                print(f"error: {err}", file=sys.stderr)
+                return 2
+
+    try:
+        day = datetime.strptime(args.date, "%Y-%m-%d") if args.date else datetime.now()
+    except ValueError:
+        print("error: --date must be YYYY-MM-DD", file=sys.stderr)
+        return 2
+    date = "" if args.all_days else wireless.nps_date(day)
+
+    logs = [args.nps_log] if args.nps_log else [
+        rf"\\{c.nps_host}\LogFiles$\{wireless.nps_log_name(day)}" for c in controllers if c.nps_host]
+    macs = [wireless.norm_mac(m) for m in args.mac.split(",") if m.strip()] if args.mac else []
+    if not logs and not macs:
+        print("error: no NPS log - pass --nps-log PATH, give controllers an 'nps_host' in the "
+              "inventory, or list devices with --mac", file=sys.stderr)
+        return 2
+
+    stats = {}
+    for path in logs:
+        print(f"Reading NPS log {path} ({'every day' if not date else date})...")
+        try:
+            stats.update(wireless.read_nps_log(path, date=date))
+        except OSError as exc:
+            print(f"error: cannot read {path}: {exc}\n  (the LogFiles$ share must be reachable "
+                  "with your credentials - e.g. run NPS-LogViewer once, or 'net use' it)",
+                  file=sys.stderr)
+            return 2
+    problems = wireless.find_problem_devices(stats, args.min_requests, args.min_rejects)
+    known = {p["mac"] for p in problems}
+    for mac in macs:
+        if mac and mac not in known:
+            base = stats.get(mac) or {"mac": mac, "users": [], "requests": 0, "accepts": 0,
+                                      "rejects": 0, "reasons": {}, "ap_radio_mac": "", "ssid": "",
+                                      "nas_ip": "", "nas_name": "", "first": "", "last": "",
+                                      "date": date}
+            problems.append(dict(base, kind="manual", reasons=dict(base.get("reasons") or {})))
+    total_req = sum(e["requests"] for e in stats.values())
+    looping = [p for p in problems if p["kind"] == "looping"]
+    print(f"  {len(stats)} devices, {total_req} login requests; "
+          f"{len(looping)} looping ({sum(p['requests'] for p in looping)} requests), "
+          f"{sum(1 for p in problems if p['kind'] == 'rejected')} only rejected")
+    if not problems:
+        print("No problem devices found.")
+        return 0
+
+    saved = {}
+    for path in [p.strip() for p in (args.ap_list or "").split(",") if p.strip()]:
+        try:
+            saved[Path(path).name] = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            print(f"error: cannot read --ap-list file {path}: {exc}", file=sys.stderr)
+            return 2
+
+    wireless.assign_groups(problems, controllers, default_group=args.group if "," not in args.group else "")
+    if not controllers and not args.offline and not saved:
+        print("note: no 'controllers' in the inventory - AP names and switch ports need one "
+              "(see README, 'Trace problem Wi-Fi devices')")
+    audit = load_audit(args.output) or {}
+    trace, messages = wireless.run_trace(
+        problems, controllers, switches, args.output, offline=args.offline,
+        skip_switches=args.no_switches, audit_hosts=audit.get("hosts", []),
+        workers=args.workers, timeout=args.timeout, formats=args.formats,
+        meta={"date": date, "nps_logs": logs, "ap_list": sorted(saved),
+              "thresholds": {"min_requests": args.min_requests, "min_rejects": args.min_rejects}},
+        progress=print, saved_outputs=saved)
+
+    print()
+    print(f"{'kind':<9} {'client MAC':<18} {'account':<26} {'req':>6} {'rej':>4}  "
+          f"{'access point':<22} {'switch port':<26} now")
+    for r in trace["devices"]:
+        ap = r["ap"]["name"] if r.get("ap") else (r.get("ap_radio_mac") or "-")
+        sw = f"{r['switch']['switch']} {r['switch']['port']}" if r.get("switch") else "-"
+        live = r.get("live")
+        now = ("not checked" if live == "unknown" else
+               f"on {live.get('ap_name')}" if isinstance(live, dict) else "not connected")
+        if r.get("excluded"):
+            now += " EXCLUDED"
+        user = (r.get("users") or ["-"])[0][:26]
+        print(f"{r['kind']:<9} {r['mac']:<18} {user:<26} {r['requests']:>6} {r['rejects']:>4}  "
+              f"{ap[:22]:<22} {sw[:26]:<26} {now}")
+    print()
+    for line in messages:
+        print(line)
+    return 1 if looping else 0
+
+
 def cmd_ui(args) -> int:
     inventory = args.inventory or _find_inventory()
     hosts = []
@@ -490,6 +610,44 @@ def main(argv=None) -> int:
     p_conn.add_argument("--no-prompt", action="store_true",
                         help="never prompt for credentials (fail instead)")
     p_conn.set_defaults(func=cmd_connect)
+
+    p_tr = sub.add_parser("trace", help="find problem Wi-Fi devices in the NPS log and trace "
+                                        "them to an access point and switch port")
+    p_tr.add_argument("-i", "--inventory", default="",
+                      help="inventory with 'controllers' (default: auto-detect)")
+    p_tr.add_argument("-o", "--output", default="out",
+                      help="output dir; audit.json there marks uplinks (default: out)")
+    p_tr.add_argument("--nps-log", default="",
+                      help="IAS-format NPS log file, e.g. \\\\server\\LogFiles$\\IN2611.log "
+                           "(default: each controller's nps_host share, this month's file)")
+    p_tr.add_argument("--date", default="",
+                      help="day to analyse, YYYY-MM-DD (default: today)")
+    p_tr.add_argument("--all-days", action="store_true",
+                      help="analyse every day in the log file instead of one day")
+    p_tr.add_argument("--mac", default="",
+                      help="also trace these client MACs, comma-separated (any MAC spelling)")
+    p_tr.add_argument("--min-requests", type=int, default=200,
+                      help="login requests with no answer before a device counts as looping "
+                           "(default: 200 a day; a normal login is about 10)")
+    p_tr.add_argument("--min-rejects", type=int, default=20,
+                      help="rejects with no accept before a device counts as rejected (default: 20)")
+    p_tr.add_argument("-g", "--group", default="",
+                      help="only these campuses' controllers and switches, comma-separated")
+    p_tr.add_argument("--ap-list", default="", metavar="FILE[,FILE]",
+                      help="AP names from saved controller output ('show ap join stats summary "
+                           "all', optionally 'show ap summary') instead of logging in to the "
+                           "controller")
+    p_tr.add_argument("--offline", action="store_true",
+                      help="no SSH: reuse controller and switch data cached by the previous trace")
+    p_tr.add_argument("--no-switches", action="store_true",
+                      help="skip the switch MAC-table lookup (AP names only)")
+    p_tr.add_argument("--formats", type=_parse_formats, default=["json", "html"],
+                      help="comma-separated: json,html (default: both)")
+    p_tr.add_argument("--workers", type=int, default=8, help="parallel switch sessions (default: 8)")
+    p_tr.add_argument("--timeout", type=int, default=60, help="per-command timeout seconds (default: 60)")
+    p_tr.add_argument("--no-prompt", action="store_true",
+                      help="never prompt for credentials (fail instead)")
+    p_tr.set_defaults(func=cmd_trace)
 
     p_ui = sub.add_parser("ui", help="interactive terminal dashboard: audit browser + SSH")
     p_ui.add_argument("-i", "--inventory", default="",

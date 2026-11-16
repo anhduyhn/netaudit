@@ -469,3 +469,127 @@ def render_drift_html(result: dict) -> str:
         body.append("</div>")
 
     return _page("Config drift report", "".join(body))
+
+
+# ---------------------------------------------------------------- Wi-Fi trace report
+
+_TRACE_SEV = {"looping": "critical", "rejected": "warning", "manual": "info"}
+_TRACE_LABEL = {"looping": "looping", "rejected": "rejected", "manual": "listed"}
+
+
+def _trace_ap_cell(r: dict) -> str:
+    ap = r.get("ap")
+    if not ap:
+        radio = r.get("ap_radio_mac") or ""
+        return (f"<code>{_e(radio)}</code><div class='small'>not matched to an AP name</div>"
+                if radio else "<span class='small'>no AP in the log</span>")
+    approx = " <span class='small'>(nearest radio MAC)</span>" if ap.get("match") == "approx" else ""
+    extra = " &middot; ".join(_e(x) for x in (ap.get("model"), ap.get("ip")) if x)
+    return (f"<b>{_e(ap['name'])}</b>{approx}"
+            f"<div class='small'>{_e(ap.get('location', ''))}</div>"
+            f"<div class='small'>{extra}</div>")
+
+
+def _trace_switch_cell(sw) -> str:
+    if not sw:
+        return "<span class='small'>-</span>"
+    desc = f"<div class='small'>{_e(sw['description'])}</div>" if sw.get("description") else ""
+    note = "" if sw.get("certain", True) else "<div class='small'>via uplink, edge port not found</div>"
+    return f"<b>{_e(sw['switch'])}</b> <code>{_e(sw['port'])}</code>{desc}{note}"
+
+
+def _trace_live_cell(r: dict) -> str:
+    live = r.get("live")
+    excl = r.get("excluded")
+    out = []
+    if excl:
+        out.append(f"<span class='bad'>Excluded</span><div class='small'>{_e(excl)}</div>")
+    if live == "unknown":
+        out.append("<span class='small'>not checked</span>")
+    elif not live:
+        out.append("<span class='small'>not on the network</span>")
+    else:
+        state = live.get("policy_state") or live.get("state") or "connected"
+        cls = "ok" if state.upper() == "RUN" else "bad"
+        out.append(f"<span class='{cls}'>{_e(state)}</span> on <b>{_e(live.get('ap_name'))}</b>"
+                   f"<div class='small'>{_e(live.get('ip', ''))}</div>")
+    return "".join(out)
+
+
+def render_trace_html(trace: dict) -> str:
+    from .wireless import REASON_TEXT
+
+    rows = trace.get("devices", [])
+    kinds = {k: sum(1 for r in rows if r.get("kind") == k) for k in _TRACE_SEV}
+    connected = sum(1 for r in rows if isinstance(r.get("live"), dict))
+    located = sum(1 for r in rows if r.get("ap"))
+    body = ["<h1>Wi-Fi problem devices</h1>",
+            f"<div class='meta'>Generated {_e(trace.get('generated', ''))} &middot; NPS log "
+            f"{_e(', '.join(trace.get('nps_logs', [])) or '-')} &middot; day "
+            f"{_e(trace.get('date') or 'all')}"
+            f"{' &middot; AP names from ' + _e(', '.join(trace['ap_list'])) if trace.get('ap_list') else ''}"
+            f"{' &middot; offline (cached controller and switch data)' if trace.get('offline') else ''}"
+            "</div>",
+            _tiles([("looping", kinds["looping"]), ("rejected", kinds["rejected"]),
+                    ("traced to an AP", located), ("on the network now", connected),
+                    ("APs involved", len([g for g in trace.get("by_ap", []) if g["ap"] != "unknown AP"]))])]
+    th = trace.get("thresholds", {})
+    body.append(
+        "<p class='small'><b>Looping</b>: "
+        f"{_e(th.get('min_requests', ''))}+ login requests that day and never an accept or a "
+        "reject, usually a phone or tablet that does not trust the NPS certificate. "
+        f"<b>Rejected</b>: {_e(th.get('min_rejects', ''))}+ rejects and no accept. The AP is the "
+        "one the device last logged in through; the switch port is where that AP's wired MAC was "
+        "learned when the trace ran.</p>")
+
+    body.append("<div class='toolbar'><input id='q' type='search' "
+                "placeholder='Search MAC, account, AP, switch...'>"
+                "<button class='chip active' data-sev='all'>All</button>"
+                "<button class='chip' data-sev='critical'>Looping</button>"
+                "<button class='chip' data-sev='warning'>Rejected</button>"
+                "<select id='groupsel'><option value='all'>All campuses</option></select>"
+                "<span id='matchcount'></span></div>")
+
+    body.append("<h2>Devices</h2>")
+    body.append("<table class='searchable' data-cat='devices'><tr><th>Kind</th><th>Client</th>"
+                "<th>Account</th><th>Requests</th><th>Rejects</th><th>Active</th>"
+                "<th>Access point</th><th>Switch port</th><th>Now</th></tr>")
+    for r in rows:
+        kind = r.get("kind", "manual")
+        sev = _TRACE_SEV.get(kind, "info")
+        reasons = r.get("reasons") or {}
+        rej = "".join(f"<div class='small'>{_e(n)} &times; {_e(REASON_TEXT.get(code, 'reason ' + code))}</div>"
+                      for code, n in sorted(reasons.items(), key=lambda kv: -kv[1])[:3])
+        tag = " <span class='small'>(random MAC)</span>" if r.get("random_mac") else ""
+        body.append(
+            f"<tr data-sev='{sev}' data-group='{_e(r.get('group', ''))}'>"
+            f"<td><span class='badge sev-{sev}'>{_e(_TRACE_LABEL.get(kind, kind))}</span></td>"
+            f"<td><code>{_e(r['mac'])}</code>{tag}</td>"
+            f"<td>{_e(', '.join(r.get('users', [])))}</td>"
+            f"<td>{_e(r.get('requests', 0))}</td>"
+            f"<td>{_e(r.get('rejects', 0))}{rej}</td>"
+            f"<td style='white-space:nowrap'>{_e(r.get('first', ''))} - {_e(r.get('last', ''))}</td>"
+            f"<td>{_trace_ap_cell(r)}</td>"
+            f"<td>{_trace_switch_cell(r.get('switch'))}</td>"
+            f"<td>{_trace_live_cell(r)}</td></tr>")
+    body.append("</table>")
+
+    body.append("<h2>By access point</h2><p class='small'>Where to go: each AP with the problem "
+                "devices that last logged in through it.</p>")
+    body.append("<table class='searchable' data-cat='access points'><tr><th>Access point</th>"
+                "<th>Location</th><th>Switch port</th><th>Devices</th><th>Requests</th>"
+                "<th>Client MACs</th></tr>")
+    for g in trace.get("by_ap", []):
+        body.append(f"<tr data-group='{_e(g.get('group', ''))}'><td><b>{_e(g['ap'])}</b></td>"
+                    f"<td>{_e(g.get('location', ''))}</td>"
+                    f"<td>{_trace_switch_cell(g.get('switch'))}</td>"
+                    f"<td>{_e(g['devices'])}</td><td>{_e(g['requests'])}</td>"
+                    f"<td><code>{_e(', '.join(g['macs']))}</code></td></tr>")
+    body.append("</table>")
+
+    errs = [f"{name}: {d['error']}" for name, d in trace.get("controllers", {}).items() if d.get("error")]
+    errs += [f"{name}: {e}" for name, e in trace.get("mac_table_errors", {}).items()]
+    if errs:
+        body.append("<h2>Could not collect</h2><ul>"
+                    + "".join(f"<li class='small'>{_e(e)}</li>" for e in errs) + "</ul>")
+    return _page("Wi-Fi problem devices", "".join(body))

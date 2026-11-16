@@ -336,6 +336,72 @@ the CLI - the UI and CLI share one execution layer, so outputs are identical.
 an inventory you get the host list, audit runs and SSH; with only audit output
 you get the results browser and drift checks.
 
+## 7. Trace problem Wi-Fi devices
+
+```
+netauditor trace -g delahey
+netauditor trace --nps-log \\nps01\LogFiles$\IN2611.log --date 2026-11-16
+netauditor trace --mac fe:37:49:d4:49:6c          # one device, whatever the log says
+```
+
+Finds the Wi-Fi clients that are hurting RADIUS in the NPS log and traces each
+one to an access point and switch port, so someone can go and fix it:
+
+1. **NPS log** (IAS format): per client MAC, the account, every login result
+   and the AP radio MAC it logged in through. **Looping** devices sent
+   `--min-requests` (default 200) requests that day and never got an accept or
+   a reject, usually a phone that doesn't trust the NPS certificate.
+   **Rejected** devices got `--min-rejects` (default 20) rejects and no accept.
+   A device accepted even once is left out.
+2. **Wireless controller** (Cisco AireOS): `show ap join stats summary all`
+   and `show ap summary` turn the radio MAC into the AP's name, model,
+   location and wired MAC. `show client detail <mac>` shows whether the device
+   is on the network right now and on which AP, and `show exclusionlist`
+   whether the controller has blocked it.
+3. **Switches**: `show mac address-table dynamic` finds the port that AP's
+   wired MAC is learned on. Uplinks from the last `audit.json` are skipped, so
+   run an audit first for exact edge ports.
+
+Output is `out/trace.json` and `out/trace.html`: the devices with their AP,
+switch port and live state, plus a "by access point" table to walk the site
+with. Exit code 1 when a looping device exists. `--offline` re-runs against
+the controller and switch data cached in the previous `trace.json`, with no
+SSH. `--no-switches` stops at the AP name.
+
+No controller login? Save its output to a text file and pass it with
+`--ap-list`: the controller is never contacted and needs no credentials.
+`show ap join stats summary all` is the command that maps radio MACs to AP
+names; add `show ap summary` for locations and models. Both can go in one
+file, prompts and `--More--` lines included:
+
+```
+netauditor trace -g delahey --ap-list delahey-aps.txt --no-switches
+```
+
+Live client state ("on the network now") needs the real controller, so it
+shows "not checked". The AP list is cached in `trace.json`, so later
+`--offline` runs keep the names. Leave out `--no-switches` to still look up
+switch ports, which logs in to the switches.
+
+Controllers go in their own `controllers` list, so audits never touch them.
+They take the inventory's credentials, and `device_type` defaults to
+`cisco_wlc_ssh`. Set `nps_host` and the tool reads
+`\\<nps_host>\LogFiles$\IN<yymm>.log` for the month of `--date`:
+
+```yaml
+groups:
+  delahey:
+    hosts: [...]
+    controllers:
+      - host: 10.128.168.5
+        name: 879902WLC01
+        nps_host: 8799STADC02.services.education.vic.gov.au
+```
+
+Reading the log needs access to the `LogFiles$` share with your own Windows
+credentials (map it once, e.g. with `net use`). Each problem device is matched
+to its campus by the controller IP that sent its login (the RADIUS NAS IP).
+
 ## Typical workflow
 
 From the folder containing `inventory.yml` - interactive:

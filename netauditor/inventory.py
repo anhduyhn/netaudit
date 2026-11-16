@@ -37,6 +37,7 @@ class Host:
     device_type: str = "cisco_ios"
     port: int = 22
     group: str = ""  # campus/site; "" means ungrouped
+    nps_host: str = ""  # controllers only: the NPS server whose LogFiles$ share holds its RADIUS log
 
     def display_name(self) -> str:
         return self.name or self.host
@@ -120,6 +121,78 @@ def _load_yaml(path: Path) -> "list[Host]":
         for entry in gdata.get("hosts") or []:
             add(entry, group=str(gname), group_defaults=gdata.get("defaults") or {})
     return hosts
+
+
+def load_controllers(path, prompt_missing: bool = True,
+                     require_credentials: bool = True) -> "list[Host]":
+    """Wireless controllers from a YAML inventory's 'controllers' lists.
+
+    Controllers live apart from 'hosts' so a switch audit never runs IOS
+    commands against them. Accepted in two places, both optional:
+
+        controllers:            # top level; give each a 'group'
+          - host: 10.128.168.5
+            group: delahey
+        groups:
+          delahey:
+            controllers:        # inside a group; inherits the group name
+              - host: 10.128.168.5
+                nps_host: 8799STADC02.services.education.vic.gov.au
+
+    They take the same defaults / group defaults / env / prompt credentials as
+    switches; device_type defaults to cisco_wlc_ssh (AireOS). Plain-text
+    inventories have no controllers. Returns [] when none are defined.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise InventoryError(f"inventory file not found: {path}")
+    if path.suffix.lower() not in YAML_SUFFIXES:
+        return []
+    with open(path, encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    if not isinstance(data, dict):
+        return []
+    defaults = data.get("defaults") or {}
+    controllers = []
+
+    def add(entry, group="", group_defaults=None):
+        if isinstance(entry, str):
+            entry = {"host": entry}
+        if not isinstance(entry, dict) or not entry.get("host"):
+            raise InventoryError(f"{path}: each controller needs a 'host' address: {entry!r}")
+        merged = {k: v for k, v in defaults.items() if k != "device_type"}
+        merged.update({k: v for k, v in (group_defaults or {}).items() if k != "device_type"})
+        merged.update({k: v for k, v in entry.items() if v is not None})
+        controllers.append(Host(
+            host=str(merged["host"]),
+            name=str(merged.get("name", "") or ""),
+            username=str(merged.get("username", "") or ""),
+            password=str(merged.get("password", "") or ""),
+            secret=str(merged.get("secret", "") or ""),
+            device_type=str(entry.get("device_type") or "cisco_wlc_ssh"),
+            port=int(merged.get("port", 22) or 22),
+            group=str(merged.get("group", group) or ""),
+            nps_host=str(merged.get("nps_host", "") or ""),
+        ))
+
+    top = data.get("controllers") or []
+    if not isinstance(top, list):
+        raise InventoryError(f"{path}: 'controllers' must be a list")
+    for entry in top:
+        add(entry)
+    for gname, gdata in (data.get("groups") or {}).items():
+        if isinstance(gdata, dict):
+            for entry in gdata.get("controllers") or []:
+                add(entry, group=str(gname), group_defaults=gdata.get("defaults") or {})
+    if controllers:
+        _apply_env(controllers)
+        if prompt_missing:
+            _prompt_missing(controllers)
+        if require_credentials:
+            missing = [c.host for c in controllers if not c.username or not c.password]
+            if missing:
+                raise InventoryError("no credentials for controller(s): " + ", ".join(missing))
+    return controllers
 
 
 def _load_plain(path: Path) -> "list[Host]":

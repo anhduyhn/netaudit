@@ -23,6 +23,11 @@ groups:
       - host: 10.2.0.12
         username: localadmin    # inline credentials override all defaults
         password: different
+    # Wireless controllers for 'netauditor trace' (never audited as switches).
+    controllers:
+      - host: 10.2.0.5
+        name: de-wlc-1          # device_type defaults to cisco_wlc_ssh (AireOS)
+        nps_host: nps01.example.org   # its RADIUS log: \\nps01.example.org\LogFiles$\IN<yymm>.log
 
 # Ungrouped hosts (always audited); a per-host 'group' key also works.
 hosts:
